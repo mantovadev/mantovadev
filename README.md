@@ -2,7 +2,7 @@
 
 Community di riferimento a Mantova per informatica, software e tech.
 
-Meetup mensili, talk aperti e networking per developer, studenti e appassionati.
+Meetup mensili, talk e networking per developer, studenti e appassionati.
 
 ## 👋 Chi siamo
 
@@ -38,7 +38,7 @@ Canali attivi / previsti:
 
 - Eventbrite: [https://www.eventbrite.com/cc/mantova-dev-4822410](https://www.eventbrite.com/cc/mantova-dev-4822410)
 - Telegram: [https://t.me/+uESvpTqd1ZpmZGE0](https://t.me/+uESvpTqd1ZpmZGE0)
-- LinkedIn
+- LinkedIn: [https://www.linkedin.com/company/mantovadev](https://www.linkedin.com/company/mantovadev)
 - Facebook
 - Instagram
 - Mailing list (aperta a tutti gli iscritti): [mantovadev@googlegroups.com](mailto:mantovadev@googlegroups.com)
