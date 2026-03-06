@@ -34,13 +34,14 @@ La pubblicazione e gestione iscrizioni avverrà tramite **Eventbrite** ([tutti g
 
 ## 🌐 Canali community
 
-Canali attivi / previsti:
+Canali attivi:
 
 - Eventbrite: [https://www.eventbrite.com/cc/mantova-dev-4822410](https://www.eventbrite.com/cc/mantova-dev-4822410)
 - Telegram: [https://t.me/+uESvpTqd1ZpmZGE0](https://t.me/+uESvpTqd1ZpmZGE0)
 - LinkedIn: [https://www.linkedin.com/company/mantovadev](https://www.linkedin.com/company/mantovadev)
-- Facebook
-- Instagram
+- YouTube: [https://www.youtube.com/@MantovaDev](https://www.youtube.com/@MantovaDev)
+- Instagram: [https://www.instagram.com/mantovadev](https://www.instagram.com/mantovadev)
+- Facebook: [https://www.facebook.com/people/Mantova-Dev/61585731386115](https://www.facebook.com/people/Mantova-Dev/61585731386115)
 - Mailing list (aperta a tutti gli iscritti): [mantovadev@googlegroups.com](mailto:mantovadev@googlegroups.com)
 - Email organizzatori (per proposte talk): [mantovadev@gmail.com](mailto:mantovadev@gmail.com)
 
