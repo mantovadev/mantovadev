@@ -24,7 +24,7 @@ Vuoi condividere un'idea, una demo, una retrospettiva, un'esperienza o uno spunt
 
 Perfetto: chiunque può proporre un intervento, a qualsiasi livello di esperienza. Non servono slide perfette: basta un contenuto che possa essere utile, stimolare una discussione o semplicemente far riflettere.
 
-Canale di proposta talk: [mantovadev@gmail.com](mailto:mantovadev@gmail.com).
+Canale di proposta talk: [mantovadev@gmail.com](mailto:mantovadev@gmail.com)
 
 ## 📅 Eventi
 

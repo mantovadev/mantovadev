@@ -10,13 +10,16 @@ Breve descrizione dell'incontro.
 
 ## Agenda
 
-- 1) Benvenuto
-- 2) Talk / confronto
-- 3) Networking
+1) Benvenuto
+2) Talk
+3) Networking
 
-## Talk proposti
+## Talk
 
-- Titolo talk — Nome speaker
+- **Titolo:** Titolo Talk
+- **Speaker:** Presentatori
+- **Descrizione:**
+Descrizione degli argomenti trattati.
 
 ## Come partecipare
 
@@ -24,4 +27,4 @@ Inserire qui eventuale link iscrizione (es. Eventbrite/Meetup) oppure indicazion
 
 ## Note
 
-Informazioni extra (es. accessibilità, parcheggio, community guidelines).
+Informazioni extra.
