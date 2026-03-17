@@ -6,11 +6,11 @@ In questa cartella troverai un file Markdown per ogni evento.
 
 Usiamo il formato:
 
-`YYYY-MM-DD-titolo-evento.md`
+`YYYY-MM-DD.md`
 
 Esempio:
 
-`2026-04-15-primo-incontro-mantovadev.md`
+`2026-04-09.md`
 
 ## Template
 
