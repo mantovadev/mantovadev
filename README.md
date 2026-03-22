@@ -50,6 +50,17 @@ Canali attivi:
 - [`assets/`](assets/) → materiali grafici, template, immagini e branding
 - [`events/`](events/) → dettagli dei singoli eventi
 
+### Assets Guide
+
+Gli asset sorgente sono mantenuti in formato SVG nella cartella [`assets/svg/`](assets/svg/).
+
+Per esportare PNG on-demand usa lo script [`assets/export-png.sh`](assets/export-png.sh):
+
+- Export base (stessa dimensione del documento SVG): `assets/export-png.sh -o /tmp/mantovadev-png`
+- Export con larghezze specifiche: `assets/export-png.sh -o /tmp/mantovadev-png --width 512 --width 1024`
+
+`--out-dir` è obbligatorio.
+
 ## 🚧 Work in progress
 
 Questa repository è in fase di avvio: nelle prossime settimane aggiungeremo informazioni su team organizzativo, calendario e modalità di partecipazione.
