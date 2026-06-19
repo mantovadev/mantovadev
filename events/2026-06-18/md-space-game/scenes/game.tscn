@@ -1,0 +1,91 @@
+[gd_scene load_steps=9 format=3 uid="uid://ujwhtbk0x4bw"]
+
+[ext_resource type="Script" uid="uid://bfjvc558re1in" path="res://scripts/game.gd" id="1_lnu2h"]
+[ext_resource type="PackedScene" uid="uid://bqhb1dk78b1i7" path="res://scenes/ship.tscn" id="1_uwrxv"]
+[ext_resource type="Texture2D" uid="uid://1hljlc4q0d4v" path="res://sprites/background.png" id="1_yqjtg"]
+[ext_resource type="Texture2D" uid="uid://cis23h2h5hn01" path="res://sprites/playerLife.png" id="4_lbhrr"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_lnu2h"]
+size = Vector2(50, 744)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_lbhrr"]
+size = Vector2(1313, 65)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_iywne"]
+size = Vector2(50, 735)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_p57ef"]
+size = Vector2(1284, 17)
+
+[node name="Game" type="Node2D"]
+script = ExtResource("1_lnu2h")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_yqjtg")
+centered = false
+
+[node name="Ship" parent="." instance=ExtResource("1_uwrxv")]
+position = Vector2(641, 655)
+
+[node name="StaticBody2D" type="StaticBody2D" parent="."]
+collision_layer = 8
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D"]
+position = Vector2(-27, 362)
+shape = SubResource("RectangleShape2D_lnu2h")
+
+[node name="StaticBody2D2" type="StaticBody2D" parent="."]
+collision_layer = 8
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D2"]
+position = Vector2(629, -92)
+shape = SubResource("RectangleShape2D_lbhrr")
+
+[node name="StaticBody2D3" type="StaticBody2D" parent="."]
+collision_layer = 8
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D3"]
+position = Vector2(1317, 358)
+shape = SubResource("RectangleShape2D_iywne")
+
+[node name="StaticBody2D4" type="StaticBody2D" parent="."]
+collision_layer = 8
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D4"]
+position = Vector2(645, 729.5)
+shape = SubResource("RectangleShape2D_p57ef")
+
+[node name="Timer" type="Timer" parent="."]
+autostart = true
+
+[node name="Label" type="Label" parent="."]
+offset_left = 1194.0
+offset_top = 5.0
+offset_right = 1275.0
+offset_bottom = 88.0
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_font_sizes/font_size = 60
+text = "0"
+
+[node name="HBoxContainer" type="HBoxContainer" parent="."]
+texture_filter = 1
+offset_left = 11.0
+offset_top = 7.0
+offset_right = 190.0
+offset_bottom = 42.0
+theme_override_constants/separation = 40
+
+[node name="TextureRect" type="TextureRect" parent="HBoxContainer"]
+layout_mode = 2
+texture = ExtResource("4_lbhrr")
+
+[node name="TextureRect2" type="TextureRect" parent="HBoxContainer"]
+layout_mode = 2
+texture = ExtResource("4_lbhrr")
+
+[node name="TextureRect3" type="TextureRect" parent="HBoxContainer"]
+layout_mode = 2
+texture = ExtResource("4_lbhrr")
+
+[connection signal="timeout" from="Timer" to="." method="_on_timer_timeout"]

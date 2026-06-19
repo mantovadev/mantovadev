@@ -1,0 +1,22 @@
+[gd_scene load_steps=4 format=3 uid="uid://bqhb1dk78b1i7"]
+
+[ext_resource type="Script" uid="uid://dmrykawfgil4d" path="res://scripts/ship.gd" id="1_2gnfn"]
+[ext_resource type="Texture2D" uid="uid://dk1sva60alqdm" path="res://sprites/playerShip.png" id="1_q631a"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_2gnfn"]
+radius = 13.0
+height = 78.0
+
+[node name="Ship" type="CharacterBody2D"]
+collision_mask = 12
+script = ExtResource("1_2gnfn")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_q631a")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CapsuleShape2D_2gnfn")
+
+[node name="Timer" type="Timer" parent="."]
+
+[connection signal="timeout" from="Timer" to="." method="_on_timer_timeout"]

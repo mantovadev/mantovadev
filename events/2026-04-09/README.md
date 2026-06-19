@@ -31,5 +31,6 @@ Link iscrizione Eventbrite: https://www.eventbrite.it/e/biglietti-mantova-dev-19
 
 ## Risorse
 
-- Registrazione: https://www.youtube.com/watch?v=hIzCNddVFiw
-- Slide: https://drive.google.com/file/d/1nHXHsSDVxC0LJeoGi3G4f6lHgbrToMIP
+- Registrazione: [YouTube](https://www.youtube.com/watch?v=hIzCNddVFiw)
+- Slide: [Talk with Your Data.pdf](./Talk%20with%20Your%20Data.pdf)
+- Codice: [hibernate-assistant](https://github.com/mbellade/demos/tree/main/quarkus/hibernate-assistant)

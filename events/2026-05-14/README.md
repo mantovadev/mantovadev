@@ -29,4 +29,4 @@ Link iscrizione Eventbrite: https://www.eventbrite.it/e/biglietti-mantova-dev-2-
 
 ## Risorse
 
-- Slide: https://drive.google.com/file/d/1JSTUC0V_yzBhQiWIsAhck1Cq2-DU8o7w
+- Slide: [Anatomia di un Large Language Model.pdf](./Anatomia%20di%20un%20Large%20Language%20Model.pdf)

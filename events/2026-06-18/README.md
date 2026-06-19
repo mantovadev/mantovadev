@@ -25,3 +25,9 @@ A seguire, Lorenzo Mazzola terrà il talk principale della serata.
 ## Come partecipare
 
 Link iscrizione Eventbrite: https://www.eventbrite.it/e/1990489994155
+
+## Risorse
+
+- Registrazione: [YouTube](https://www.youtube.com/watch?v=0nmaIK3_lm0)
+- Slide: [GodotPresentazioneMD.pdf](./GodotPresentazioneMD.pdf)
+- Demo: [md-space-game](./md-space-game/)

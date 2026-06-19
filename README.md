@@ -28,7 +28,7 @@ Canale di proposta talk: [mantovadev@gmail.com](mailto:mantovadev@gmail.com)
 
 ## 📅 Eventi
 
-Gli eventi verranno pubblicati nella cartella [`events/`](events/), con un file `.md` dedicato per ogni incontro.
+Gli eventi verranno pubblicati nella cartella [`events/`](events/), con una cartella dedicata per ogni incontro contenente `README.md` ed eventuali materiali allegati, come slide, demo o altri asset.
 
 La pubblicazione e gestione iscrizioni avverrà tramite **Eventbrite** ([tutti gli eventi](https://www.eventbrite.com/cc/mantova-dev-4822410)), dove saranno indicati anche luogo e dettagli logistici del singolo meetup.
 
@@ -48,7 +48,7 @@ Canali attivi:
 ## 📁 Struttura repository
 
 - [`assets/`](assets/) → materiali grafici, template, immagini e branding
-- [`events/`](events/) → dettagli dei singoli eventi
+- [`events/`](events/) → dettagli dei singoli eventi e relativi materiali
 
 ### Assets Guide
 

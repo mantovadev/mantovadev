@@ -25,6 +25,10 @@ Descrizione degli argomenti trattati.
 
 Inserire qui eventuale link iscrizione (es. Eventbrite/Meetup) oppure indicazioni libere.
 
-## Note
+## Risorse
 
-Informazioni extra.
+Elencare qui eventuali materiali collegati, ad esempio. Questa sezione puo essere completata anche dopo la creazione iniziale dell'evento.
+
+- Slide: [slides.pdf](./slides.pdf)
+- Demo: [demo/](./demo/)
+- Repository: [nome-progetto](https://github.com/...)
