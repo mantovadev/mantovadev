@@ -1,6 +1,6 @@
-# Terzo incontro Mantova Dev
+# Mantova Dev #4 - Green Computing in Pratica
 
-- **Data:** 2026-09-18
+- **Data:** 2026-09-17
 - **Orario:** 18:30 - 20:30
 - **Luogo:** Creative Lab Mantova, Viale Valle d'Aosta, 20, 46100 Lunetta-frassino MN ([indicazioni](https://maps.app.goo.gl/G7bRjQLmJYS8ARz68))
 
