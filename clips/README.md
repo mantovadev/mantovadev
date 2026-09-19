@@ -1,95 +1,76 @@
-# Clips pipeline: usage
+# Clips pipeline
 
-Turns a local Mantova Dev meetup recording into short captioned clips for Shorts,
-Reels and TikTok. Clips keep the source 16:9 framing: the pipeline only cuts and burns
-captions, with no cropping or reframing. See [`PLANNING.md`](./PLANNING.md) for the
-decisions, the full pipeline and the work packages. Steps 1 to 3 (ingest,
-transcript-extract, highlight-selection) are implemented so far.
+Turns the local recording of a Mantova Dev meetup into a few short vertical clips
+(1080x1920, 15 to 60 s) with word-by-word captions in the community look, ready for
+YouTube Shorts, Instagram Reels and TikTok.
+
+Everything runs locally and for free: no footage is uploaded anywhere. An agent
+(Claude Code, Pi, or any harness that reads markdown and runs shell commands) drives
+the steps; a human chooses the clips, checks the captions and publishes by hand.
+
+## How it works
+
+One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
+`SKILL.md` before running that step.
+
+| Step | Skill | Commands | Human decides |
+|------|-------|----------|---------------|
+| 1 | `skills/ingest` | `ingest` | which file, which audio track |
+| 2 | `skills/transcript-extract` | `transcribe`, `render` | nothing (agent sanity-checks the text) |
+| 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which of 5 candidates to keep, where each starts and ends |
+| 4 | `skills/produce-clip` | `cut`, `align`, `burn` | caption text fixes, final approval |
+
+To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
+for event 2026-09-17, follow `clips/README.md`". Every command takes
+`--event <YYYY-MM-DD>`; `clips/clips.py <command> --help` lists the options.
+
+The review loops are interactive: the agent proposes, opens a preview file for you,
+you answer in plain words ("start at 0:12", "drop this one", "it's CPU, not cp"), it
+applies the change and shows you the result again.
 
 ## Prerequisites
+
+Ask before installing or downloading anything.
 
 ```
 brew install ffmpeg-full whisper-cpp
 ```
 
-Homebrew's plain `ffmpeg` formula lacks `libass`, which the caption-burn step (not
-yet implemented) needs. Use `ffmpeg-full`. The Homebrew formula `whisper-cpp` (now
-an alias of `whisper.cpp`) installs the `whisper-cli` binary.
+- Homebrew's plain `ffmpeg` has no `libass`, which the captions need: use
+  `ffmpeg-full`. `whisper-cpp` (now an alias of `whisper.cpp`) provides `whisper-cli`.
+- Python 3.9 or later, standard library only.
+- Whisper models, downloaded by hand into `clips/models/` (gitignored):
+  `ggml-large-v3-turbo.bin` (about 1.5 GB) from
+  https://huggingface.co/ggerganov/whisper.cpp and `ggml-silero-v5.1.2.bin` from
+  https://huggingface.co/ggml-org/whisper-vad.
+- The Aeonik Pro font family installed on the machine (brand font, proprietary, not
+  in the repo). Without it captions fall back to a default font.
 
-Whisper models are not installed by Homebrew and are never committed. Download them
-manually into `clips/models/` (gitignored):
+## Where things live
 
-- `ggml-large-v3-turbo.bin` from https://huggingface.co/ggerganov/whisper.cpp
-- Silero VAD ggml model (`ggml-silero-v5.1.2.bin`) from
-  https://huggingface.co/ggml-org/whisper-vad
+- `clips/clips.py`, `clips/skills/`, `clips/schemas/`, `clips/config/`: the process.
+  This is all that is committed.
+- `clips/work/<event>/`: everything a run produces (media, transcript, candidates,
+  previews, captions). Gitignored. The finished clips are
+  `clips/work/<event>/final/clip_<id>.final.mp4`.
+- `clips/models/`: Whisper models. Gitignored.
+- `events/`: never written by the pipeline.
 
-## Quick start
+## Recording checklist (for whoever streams the event)
 
-Using event `2026-09-17` and a local recording as an example:
+- Record locally in OBS while streaming ("Automatically record when streaming", or
+  press Start Recording). The local file is better than anything downloaded later.
+- Use a separate recording encoder if the machine can afford it; "Same as stream"
+  caps the quality at the stream bitrate.
+- Format: Hybrid MP4 or MKV (both survive a crash). MKV if there are several audio
+  tracks.
+- If practical, put the speaker's microphone on its own audio track in addition to
+  the full mix: it transcribes better.
+- Keep the camera fixed, with the speaker and the slides both in frame: one crop
+  rectangle then serves the whole talk.
 
-```
-clips/skills/ingest/ingest.sh --source /path/to/recording.mp4 --event 2026-09-17
-clips/skills/transcript-extract/transcribe.sh --event 2026-09-17
-clips/skills/highlight-selection/render_transcript.sh --event 2026-09-17
-```
+## Before publishing
 
-`ingest.sh` prints the audio streams it finds. If the recording has a separate
-mic-only track, pick it with `--audio-track <n>` for a cleaner transcript.
-
-After `render_transcript.sh`, an agent follows
-`clips/skills/highlight-selection/SKILL.md` to read the whole talk and write
-`clips/work/2026-09-17/highlights.json` (candidates by segment index and
-quote, never by timestamp). Then:
-
-```
-clips/skills/highlight-selection/snap_clip.py snap --event 2026-09-17
-```
-
-snaps each candidate to a cut point (using silence detection on
-`audio.wav`) and writes `clips/work/2026-09-17/candidates.md` for human
-review. Once a human has picked which candidates to keep:
-
-```
-clips/skills/highlight-selection/snap_clip.py choose --event 2026-09-17 --ids 1,3
-```
-
-marks those candidates `chosen` in `highlights.json`. See the SKILL.md for the
-full procedure, including how to fix flagged candidates (`quote_mismatch`,
-`too_short`, `too_long`, overlaps).
-
-## Where outputs land
-
-All run outputs for an event live under `clips/work/2026-09-17/` (gitignored):
-
-- `source.mp4`, `audio.wav`: heavy working media from `ingest`.
-- `transcript.raw.json`: the raw whisper output.
-- `transcript.json`: compact segment + word-level transcript. Segment (sentence)
-  times are reliable; word timing is only rough (see
-  `clips/skills/transcript-extract/SKILL.md`). Captions get their word timing from a
-  separate per-clip re-alignment pass, not from this file's word times.
-- `highlights.json`: clip candidates (written by the highlight-selection agent
-  step) plus their computed cut points and chosen status (written by
-  `snap_clip.py`).
-- `candidates.md`: human-readable review sheet generated from `highlights.json`,
-  one section per candidate with its time range, flags, hook, reason, transcript
-  text and a preview `ffplay` command.
-- `silences.json`: cached silence detection used by `snap_clip.py`.
-
-Finished clips will later land in `clips/work/2026-09-17/final/`.
-
-`clips/models/` holds whisper model files, also gitignored.
-
-## Committed vs ignored
-
-Nothing produced by a pipeline run is committed. Every per-event file lives in the
-gitignored `clips/work/<event>/`. The repo only holds the process: scripts,
-`SKILL.md` files, schemas, config and docs. The pipeline never writes into
-`events/`; that folder stays human-only (event `README.md` and talk materials).
-
-## Not implemented yet
-
-- **[4] clip-cutter**: ffmpeg frame-accurate cut and fixed-layout vertical reframe.
-- **[5] caption-burn**: generates a per-word `.ass` file and burns it in.
-- **[6] social-copy**: per-clip, per-platform title/hook/caption/hashtags in Italian.
-
-See `clips/PLANNING.md` for the full step details and the work package plan.
+- Clips show speakers' faces and voices under the community's name: get the speaker's
+  consent before posting.
+- A human watches every clip to the end before it goes out.

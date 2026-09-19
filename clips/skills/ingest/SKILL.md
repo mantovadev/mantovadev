@@ -2,54 +2,44 @@
 
 ## Trigger
 
-A new event recording needs to enter the clipping pipeline: a human (or an agent
-following `clips/README.md`) has a local source file (OBS recording, or a YouTube
-Studio download) and wants to prepare it for transcription and clipping.
+A human hands over the local recording of an event (OBS recording or any other local
+video file) and wants clips from it. This is the first step.
 
 ## What it does
 
-Normalizes the source recording into a working copy plus an extracted audio track:
+Prepares `clips/work/<event>/` with a working copy of the video and the audio track
+that Whisper needs:
 
-- Remuxes the source to MP4 if it is not already MP4 (stream copy, no re-encode). If
-  the source is already `.mp4`, it symlinks instead of copying, since copying a
-  multi-gigabyte file is wasteful.
-- Lists the audio streams in the source (index, codec, channels, title tag) so a human
-  or agent can spot a mic-only track.
-- Extracts the chosen audio stream to a 16 kHz mono `audio.wav` for transcription.
-- Warns (without failing) if `ffmpeg` lacks the `ass` filter, since that is needed
-  later by the caption-burn step, not by ingest itself.
+- `.mp4` sources are symlinked (no multi-gigabyte copy). Other containers are remuxed
+  to MP4 by stream copy, never re-encoded.
+- Lists the audio streams (index, codec, channels, title) so a mic-only track can be
+  spotted.
+- Extracts one audio stream to 16 kHz mono WAV.
+- Warns if `ffmpeg` has no `ass` filter (needed later by `burn`; on macOS install
+  `ffmpeg-full`).
 
 ## Inputs
 
-- `--source <path>`: local path to the recording (mp4, mkv, mov). Required.
-- `--event <YYYY-MM-DD>`: event date, used as the output folder name. Required.
-- `--audio-track <n>`: 0-based index among audio streams to extract. Default: 0.
+- `--source <path>`: the recording (mp4, mkv, mov). Always given by the human.
+- `--event <YYYY-MM-DD>`: the event date. Names the work folder.
+- `--audio-track <n>`: 0-based index among the audio streams. Default 0.
 - `--force`: overwrite existing outputs.
 
 ## Outputs
 
-Written to `clips/work/<event>/` (gitignored, resolved relative to the repo root, not
-the caller's working directory):
-
-- `source.mp4`: the normalized video (remuxed copy, or a symlink to the original if it
-  was already MP4).
-- `audio.wav`: 16 kHz mono PCM s16le audio, extracted from the chosen audio stream.
+In `clips/work/<event>/` (gitignored): `source.mp4` and `audio.wav`.
 
 ## How
 
 ```
-clips/skills/ingest/ingest.sh --source /path/to/recording.mp4 --event 2026-09-17
+clips/clips.py ingest --source /path/to/recording.mp4 --event <event>
 ```
 
-Run it once per event. If outputs already exist, pass `--force` to redo the step.
-
-### Multi-track note
-
-If the OBS recording has a mic-only audio track in addition to the full mix, prefer
-the mic-only track for transcription: it is cleaner for ASR than a mix with room
-audio, music or other speakers. Use the printed audio stream list to find its index,
-then pass `--audio-track <n>`.
-
-MKV is the safe container choice when the recording has multiple audio tracks.
-Whether OBS's Hybrid MP4 format handles multi-track audio the same way is
-unverified: check the printed stream list for the recording in hand.
+- If the video and the audio arrive as two separate files, mux them first without
+  re-encoding (`ffmpeg -i video.mp4 -i audio.webm -map 0:v:0 -map 1:a:0 -c copy
+  clips/work/<event>/input.mkv`) and ingest the result.
+- If the stream list shows a mic-only track next to the full mix, prefer it
+  (`--audio-track <n>`): it transcribes better than a mix with room noise. MKV is the
+  safe container for multi-track recordings; multi-track in OBS Hybrid MP4 is
+  unverified.
+- Next step: `transcript-extract`.
