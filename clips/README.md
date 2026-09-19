@@ -4,10 +4,6 @@ Turns the local recording of a Mantova Dev meetup into a few short vertical clip
 (1080x1920, 15 to 60 s) with word-by-word captions in the community look, ready for
 YouTube Shorts, Instagram Reels and TikTok.
 
-Everything runs locally and for free: no footage is uploaded anywhere. An agent
-(Claude Code, Pi, or any harness that reads markdown and runs shell commands) drives
-the steps; a human chooses the clips, checks the captions and publishes by hand.
-
 ## How it works
 
 One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
@@ -17,8 +13,8 @@ One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
 |------|-------|----------|---------------|
 | 1 | `skills/ingest` | `ingest` | which file, which audio track |
 | 2 | `skills/transcript-extract` | `transcribe`, `render` | nothing (agent sanity-checks the text) |
-| 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which of 5 candidates to keep, where each starts and ends |
-| 4 | `skills/produce-clip` | `cut`, `align`, `burn` | caption text fixes, final approval |
+| 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which moments from the agent's long list to preview (plus your own), then which to keep and where each starts and ends |
+| 4 | `skills/produce-clip` | `cut`, `align`, `burn` | caption text fixes, final approval, post text |
 
 To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
 for event 2026-09-17, follow `clips/README.md`". Every command takes
@@ -71,6 +67,4 @@ brew install ffmpeg-full whisper-cpp
 
 ## Before publishing
 
-- Clips show speakers' faces and voices under the community's name: get the speaker's
-  consent before posting.
 - A human watches every clip to the end before it goes out.

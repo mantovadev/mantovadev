@@ -16,9 +16,10 @@ and TikTok:
 3. `burn`: renders a 1080x1920 canvas in the Mantova Dev look: dark brand background,
    logo on top, the picture at full width, word-by-word captions below it (upper
    case, up to 3 words at a time, the spoken word highlighted in brand turquoise) and
-   `mantova.dev` at the bottom.
+   `https://mantova.dev` at the bottom.
 
-The human reviews the words and the result. You never publish anything.
+The human reviews the words and the result. The step ends with a proposed post text
+for each approved clip, given in the chat. You never publish anything.
 
 ## Inputs
 
@@ -86,6 +87,20 @@ In `clips/work/<event>/final/`, per clip:
      `clips/clips.py` and re-run `align --force`.
 
    Repeat until the human approves.
+
+7. When the human approves a clip, propose the post text for it in the chat. Do not
+   write it to a file: nothing about a run is kept in the repo, and the human copies
+   what they like.
+   - Italian, informal and welcoming, like the root `README.md`. No hype and no
+     invented facts: use only what is said in the clip and what is in
+     `events/<event>/README.md` (talk title, speaker, links).
+   - Per clip: a title of at most 60 characters (needed for YouTube Shorts, works as
+     the first line elsewhere); a caption of 2 or 3 short sentences (the hook, what
+     the clip shows, an invitation to the next meetup with `https://mantova.dev`);
+     5 to 8 hashtags mixing community ones (`#MantovaDev` `#Mantova`) and topic ones.
+   - Name the speaker only if the event README names them.
+   - One proposal, then adjust on feedback. The same text serves all three platforms
+     unless the human asks for per-platform versions.
 
 Order matters: settle the cut first. If the human changes a clip's start or end now,
 go back to `choose --start/--end` in `highlight-selection`, then `cut --force`,

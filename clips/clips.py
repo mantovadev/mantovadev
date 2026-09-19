@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn, Optional
 
 # ---------------------------------------------------------------- tuning
 
@@ -50,6 +51,7 @@ MAX_TAIL = 0.45
 SILENCE_NOISE = "-35dB"
 SILENCE_MIN_S = 0.4
 PREVIEW_PAD = 5.0
+PHRASE_SEARCH_S = 30.0  # --start-at / --end-after look this far around the current cut
 PREVIEW_CAPTION_WORDS = 10
 
 # align: timing. DTW token times tend to land a little after the
@@ -108,7 +110,9 @@ REQUIRED_CANDIDATE_KEYS = {
 
 # ---------------------------------------------------------------- shared helpers
 
-def fail(msg: str):
+def fail(msg: str) -> NoReturn:
+    """Print a one-line error and exit 1. NoReturn tells type checkers that nothing after
+    a fail() call runs, so values set before it are not seen as possibly missing."""
     print(f"clips.py: error: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -132,7 +136,7 @@ def validate_event(event):
         fail(f"--event must match YYYY-MM-DD, got: {event}")
 
 
-def work_dir_for(root: Path, event: str, override: str):
+def work_dir_for(root: Path, event: str, override: Optional[str]) -> Path:
     if override:
         return Path(override).resolve()
     return root / "clips" / "work" / event
@@ -305,10 +309,7 @@ def cmd_ingest(args, root: Path, work_dir: Path):
              "and pick a valid --audio-track.")
     print(f"  wrote {out_wav}")
 
-    try:
-        duration = ffprobe_duration(out_wav)
-    except SystemExit:
-        duration = "unknown"
+    duration = ffprobe_duration(out_wav)
 
     print()
     print(f"Ingest complete for event {args.event}:")
@@ -450,16 +451,13 @@ def cmd_transcribe(args, root: Path, work_dir: Path):
              "Download ggml-large-v3-turbo.bin manually from https://huggingface.co/ggerganov/whisper.cpp\n"
              f"and place it at: {model}")
 
-    if args.no_vad:
-        use_vad = False
-    else:
-        use_vad = True
-        vad_model = Path(args.vad_model)
-        if not vad_model.is_file():
-            fail(f"VAD model not found: {vad_model}\n"
-                 "Download the Silero VAD ggml model manually from https://huggingface.co/ggml-org/whisper-vad\n"
-                 f"and place it at: {vad_model}\n"
-                 "(or pass --no-vad to transcribe without VAD)")
+    use_vad = not args.no_vad
+    vad_model = Path(args.vad_model)
+    if use_vad and not vad_model.is_file():
+        fail(f"VAD model not found: {vad_model}\n"
+             "Download the Silero VAD ggml model manually from https://huggingface.co/ggml-org/whisper-vad\n"
+             f"and place it at: {vad_model}\n"
+             "(or pass --no-vad to transcribe without VAD)")
 
     if not args.force:
         if out_raw_json.exists():
@@ -785,6 +783,66 @@ def render_preview(cand, transcript, work_dir: Path, pad: float, duration_total)
     print(f"  wrote {previews_dir / (name + '.mp4')}", file=sys.stderr)
 
 
+def candidate_segments(cand, transcript):
+    """[(label, segment)] for the segments inside the candidate's cut (its segment span
+    if there is no cut yet), plus one segment of context before and after."""
+    segs = sorted(transcript["segments"], key=lambda g: g["i"])
+    cut = cand.get("cut")
+    inside = []
+    for n, seg in enumerate(segs):
+        if cut:
+            seg_end = segs[n + 1]["s"] if n + 1 < len(segs) else seg["e"]
+            if seg["s"] < cut["end"] - 0.3 and seg_end > cut["start"] + 0.3:
+                inside.append(n)
+        elif cand["start_seg"] <= seg["i"] <= cand["end_seg"]:
+            inside.append(n)
+    if not inside:
+        return []
+    out = []
+    if inside[0] > 0:
+        out.append(("(before)", segs[inside[0] - 1]))
+    out.extend(("", segs[n]) for n in inside)
+    if inside[-1] + 1 < len(segs):
+        out.append(("(after)", segs[inside[-1] + 1]))
+    return out
+
+
+def find_phrase_time(transcript, silences, phrase: str, near, edge: str, cand_id):
+    """Source time for a cut edge given by words: the start of the phrase (edge "start")
+    or the end of it (edge "end"), moved onto a nearby pause when there is one. Word
+    times are rough and tend to run early (up to about a second), so the search for a
+    pause reaches further forward than back, and the human still checks the re-rendered
+    preview."""
+    def norm(word):
+        return re.sub(r"[^\w']+", "", word.lower())
+    target = [norm(w) for w in phrase.split() if norm(w)]
+    if not target:
+        fail(f"candidate {cand_id}: empty phrase")
+    words = [w for w in transcript["words"] if near[0] - PHRASE_SEARCH_S <= w["s"] <= near[1] + PHRASE_SEARCH_S]
+    normed = [norm(w["w"]) for w in words]
+    hits = [i for i in range(len(words) - len(target) + 1) if normed[i:i + len(target)] == target]
+    if not hits:
+        fail(f"candidate {cand_id}: \"{phrase}\" not found near this clip. Copy the words exactly as "
+             "they appear in the transcript (clips.py status).")
+    if len(hits) > 1:
+        fail(f"candidate {cand_id}: \"{phrase}\" appears {len(hits)} times near this clip. Use a longer phrase.")
+    i = hits[0]
+    if edge == "start":
+        t = words[i]["s"]
+        near_pauses = [iv for iv in silences if t - 0.6 <= iv["end"] <= t + 1.2]
+        if near_pauses:
+            iv = min(near_pauses, key=lambda iv: abs(iv["end"] - t))
+            return iv["end"] - min(MAX_LEAD, (iv["end"] - iv["start"]) / 2)
+        return max(0.0, t - 0.15)
+    last = words[i + len(target) - 1]
+    t = last["e"]
+    near_pauses = [iv for iv in silences if last["s"] + 0.1 <= iv["start"] <= t + 1.5]
+    if near_pauses:
+        iv = min(near_pauses, key=lambda iv: iv["start"])
+        return iv["start"] + min(MAX_TAIL, (iv["end"] - iv["start"]) / 2)
+    return t + 0.15
+
+
 def print_status(highlights, event, transcript):
     """One block per candidate: id, score, chosen or not, segment range, duration,
     flags, whether each cut edge sits on a pause, any manual adjustment, the hook,
@@ -821,6 +879,9 @@ def print_status(highlights, event, transcript):
             print("  range: not snapped yet")
         print(f"  needs visuals: {'yes' if cand['needs_visuals'] else 'no'}")
         print(f"  hook: {cand['hook']}")
+        print("  transcript (what is inside the cut, plus one sentence of context either side):")
+        for label, seg in candidate_segments(cand, transcript):
+            print(f"    {label:9}[{seg['i']}] {seg['text']}")
         print()
 
 
@@ -859,6 +920,17 @@ def cmd_snap(args, root: Path, work_dir: Path):
     save_json(highlights_path, highlights)
     print(f"Wrote {highlights_path}", file=sys.stderr)
     print_status(highlights, args.event, transcript)
+
+
+def parse_id_phrases(pairs):
+    """["2=mila euro", ...] -> {2: "mila euro"}."""
+    phrases = {}
+    for pair in pairs or []:
+        id_str, sep, phrase = pair.partition("=")
+        if not sep or not id_str.strip().isdigit() or not phrase.strip():
+            fail(f"invalid argument (expected ID=WORDS): {pair}")
+        phrases[int(id_str)] = phrase.strip()
+    return phrases
 
 
 def parse_id_times(pairs):
@@ -904,18 +976,27 @@ def cmd_choose(args, root: Path, work_dir: Path):
 
     at_start = parse_id_times(args.start)
     at_end = parse_id_times(args.end)
+    words_start = parse_id_phrases(args.start_at)
+    words_end = parse_id_phrases(args.end_after)
+    silences = []
+    if words_start or words_end:
+        silences = load_json(work_dir / "silences.json", "silences cache (run snap first)")["intervals"]
     reset_ids = set()
     for text in args.reset or []:
         try:
             reset_ids.add(int(text))
         except ValueError:
             fail(f"--reset must be an integer candidate id, got: {text}")
-    for cid in list(at_start) + list(at_end) + list(reset_ids):
+    for cid in list(at_start) + list(at_end) + list(words_start) + list(words_end) + list(reset_ids):
         if cid not in known_ids:
-            fail(f"--start/--end/--reset references unknown candidate id: {cid}")
+            fail(f"unknown candidate id: {cid} (known: {sorted(known_ids)})")
     for cid in reset_ids:
-        if cid in at_start or cid in at_end:
-            fail(f"candidate {cid}: use either --reset or --start/--end, not both")
+        if cid in at_start or cid in at_end or cid in words_start or cid in words_end:
+            fail(f"candidate {cid}: use either --reset or an edge option, not both")
+    for cid in set(at_start) & set(words_start):
+        fail(f"candidate {cid}: use either --start or --start-at, not both")
+    for cid in set(at_end) & set(words_end):
+        fail(f"candidate {cid}: use either --end or --end-after, not both")
 
     audio_path = work_dir / "audio.wav"
     duration_total = ffprobe_duration(audio_path) if audio_path.is_file() else None
@@ -939,15 +1020,21 @@ def cmd_choose(args, root: Path, work_dir: Path):
         # A shift is always relative to the snapped cut. An edge named in this call has
         # its earlier shift undone and replaced; edges not named keep what they had, so
         # candidates can be adjusted one at a time without losing earlier adjustments.
-        for edge, given in (("start", at_start), ("end", at_end)):
-            if cand["id"] not in given:
+        for edge, given, phrases in (("start", at_start, words_start), ("end", at_end, words_end)):
+            if cand["id"] not in given and cand["id"] not in phrases:
                 continue
             touched = True
+            if cand["id"] in given:
+                # a time read off the preview player
+                if not cut.get("preview"):
+                    fail(f"candidate {cand['id']}: --{edge} needs a rendered preview; run the preview subcommand first")
+                target = cut["preview"]["origin"] + given[cand["id"]]
+            else:
+                # words quoted from the transcript
+                target = find_phrase_time(transcript, silences, phrases[cand["id"]],
+                                          (cut["start"], cut["end"]), edge, cand["id"])
             snapped = round(cut[edge] - manual.pop(edge, 0.0), 2)
-            # a time read off the preview player: turn it into a shift
-            if not cut.get("preview"):
-                fail(f"candidate {cand['id']}: --{edge} needs a rendered preview; run the preview subcommand first")
-            shift = round(cut["preview"]["origin"] + given[cand["id"]] - snapped, 2)
+            shift = round(target - snapped, 2)
             cut[edge] = round(snapped + shift, 2)
             if shift:
                 manual[edge] = shift
@@ -1208,7 +1295,7 @@ def read_words(path: Path):
 
 def make_chunks(words):
     chunks, cur = [], []
-    for i, word in enumerate(words):
+    for word in words:
         if cur:
             gap = word["s"] - cur[-1]["e"]
             length = sum(len(w["w"]) for w in cur) + len(cur) + len(word["w"])
@@ -1414,6 +1501,11 @@ def build_parser():
     p.add_argument("--end", action="append", metavar="ID=TIME",
                    help="Set a candidate's cut end from a time read off its preview file (seconds or M:SS). "
                         "Needs a rendered preview. Repeatable.")
+    p.add_argument("--start-at", action="append", metavar="ID=WORDS",
+                   help="Start the clip at these words, quoted from the transcript, e.g. 2=\"mi sono dimenticato\". "
+                        "Lands on a nearby pause when there is one. Repeatable.")
+    p.add_argument("--end-after", action="append", metavar="ID=WORDS",
+                   help="End the clip right after these words, e.g. 2=\"mila euro\". Repeatable.")
     p.add_argument("--reset", action="append", metavar="ID",
                    help="Return a candidate's cut to its snapped edges, dropping any manual adjustment. Repeatable.")
     p.set_defaults(func=cmd_choose)
@@ -1446,7 +1538,7 @@ def build_parser():
     p.add_argument("--crop", metavar="W:H:X:Y",
                    help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0. Remembered per "
                         "event in highlights.json; omit to reuse the stored value.")
-    p.add_argument("--footer", default="mantova.dev", help="Text at the bottom of the canvas (default: mantova.dev).")
+    p.add_argument("--footer", default="https://mantova.dev", help="Text at the bottom of the canvas (default: https://mantova.dev).")
     p.set_defaults(func=cmd_burn)
 
     return parser

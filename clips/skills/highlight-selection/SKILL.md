@@ -8,14 +8,19 @@ choose from before anything gets cut.
 
 ## What it does
 
-An agent (you) reads the whole talk, picks the best 5 moments by segment index
-and exact quote (never by timestamp), and writes them to
-`clips/work/<event>/highlights.json`. Code (`clips.py`) then validates
-those picks, computes an actual cut point for each one (snapped to detected
-silence where possible), flags problems (too short, too long, quote mismatch,
-overlap), and renders a small preview file per candidate. A human reviews the
-previews with you and picks which candidates get cut; only then does `choose`
-mark them.
+A funnel, cheap steps first:
+
+1. An agent (you) reads the whole talk and gives the human a **long list** of every
+   moment that could work as a clip: text only, in the chat, about a dozen lines.
+2. The human **shortlists** 4 or 5 of them to look at, and adds any moment they
+   remember from the talk.
+3. Only for the shortlist, you define precise candidates by segment index and
+   exact quote (never by timestamp) in `clips/work/<event>/highlights.json`. Code
+   (`clips.py`) validates them, computes an actual cut point for each one (snapped
+   to detected silence where possible), flags problems (too short, too long, quote
+   mismatch, overlap), and renders a small preview file per candidate.
+4. The human reviews the previews with you and keeps 2 or 3; only then does
+   `choose` mark them.
 
 You never compute timestamps or do time arithmetic. Segment times are
 reliable; word times are rough (see `transcript-extract`'s SKILL.md timing
@@ -48,8 +53,9 @@ indices and silence detection, not from anything you calculate.
 1. Run `clips/clips.py render --event
    <event>` and read the **entire** output, start to finish, before picking
    anything. It prints one numbered line per segment: `[<i>] <mm:ss> <text>`.
-   `<i>` is the segment index you will reference; do not reuse the `<mm:ss>`
-   stamp for anything, it is only there to help you navigate while reading.
+   `<i>` is the segment index you will reference. The `<mm:ss>` stamp is only
+   there to navigate and to tell the human roughly when a moment happens: never
+   use it to compute a cut.
 
 2. Identify where the actual talk starts and ends. Ignore:
    - organisational/logistics intro (welcome, sponsors, housekeeping) before
@@ -58,12 +64,33 @@ indices and silence detection, not from anything you calculate.
      transcript (the answer alone is rarely self-contained);
    - closing logistics (thanks, next event, apericena).
 
-3. Pick the best **5** candidates from what remains, ranked 1 (best) to 5. The
-   human will typically keep only 2 or 3, so rank honestly instead of padding.
-   Spread them across the talk. Do not cluster all 5 near the beginning just
-   because that is what you read first.
+3. Give the human the **long list**, in the chat only (no file, no `snap`, no
+   previews yet). It is a filter for what is worth watching, so keep it quick to
+   scan:
+   - Every moment that could work as a clip, in **talk order**, numbered, up to
+     about 12 for a one hour talk. Fewer if the talk does not have that many: do
+     not pad with weak moments. Cover the whole talk, not just the first half.
+   - Per moment, one compact entry: when it happens (`mm:ss`), a rough length,
+     one or two sentences on what is said, one short key quote to jog the
+     human's memory, and any caveat (needs the slides, garbled transcript,
+     depends on earlier context, the payoff comes much later).
+   - Put a star on the ones you would pick yourself (about 5). No scores here.
+   - Then ask the human which ones they want to look at (typically 4 or 5), and
+     whether they remember other moments from the talk. They were in the room:
+     delivery, laughter and what landed with the audience are invisible in a
+     transcript, so their picks outrank yours.
+   - The human may describe a moment loosely ("the thermal throttling bit",
+     "around minute 40, the Rust comparison"). Find it in the rendered
+     transcript, quote the passage back, and ask them to confirm it (or to say
+     which one they meant if it could be two passages) before going on.
 
-   Criteria, in rough priority order:
+   Wait for the human's shortlist. The number is theirs to set: if they ask for
+   more or fewer, follow that.
+
+4. Define a precise candidate for each shortlisted moment (the human's own
+   moments included), numbered 1..N in the order the human gave or, failing that,
+   your own ranking. This is where the care goes. Criteria, in rough priority
+   order:
    - Self-contained: makes sense with zero prior context from earlier in the
      talk. If it needs a setup, include the setup segment(s) or drop it.
    - Has a hook: a strong, surprising or counterintuitive claim, a concrete
@@ -95,8 +122,11 @@ indices and silence detection, not from anything you calculate.
      stamps is enough). Do not max out the length: shorter and punchier beats
      a clip that drags to 59 s.
    - Candidates must not overlap in segment range with each other.
+   - If a shortlisted moment turns out not to work once you look closely (no
+     clean opening, no ending under 60 s), say so and propose the closest span
+     that does, instead of silently dropping or reshaping it.
 
-4. For each candidate, write:
+   For each candidate, write:
    - `start_seg` / `end_seg`: the segment indices (inclusive) that bound the
      clip.
    - `start_quote` / `end_quote`: copy the **exact text** of the first and
@@ -169,20 +199,31 @@ indices and silence detection, not from anything you calculate.
      cut before the punchline, garbled transcript, and so on).
    - Then, for each candidate in rank order: open its preview for the human
      (`open clips/work/<event>/previews/candidate_<id>.mp4` on macOS,
-     `xdg-open` on Linux), say where the clip starts and ends in the player
-     (the `status` output has it), and wait for the verdict: keep, drop, or
-     adjust.
-   - The human gives times as read off the player. Apply them, which also
-     re-renders that preview, then open it again and ask again:
+     `xdg-open` on Linux). In the same message, paste that candidate's
+     transcript from the `status` output (the sentences inside the cut plus the
+     one before and after) and say where the clip starts and ends in the
+     player, so the human can read along while watching. Then wait for the
+     verdict: keep, drop, or adjust.
+   - The human answers with times read off the player ("end at 0:29") or with
+     words from the transcript ("stop after 'mila euro'", "start at 'mi sono
+     dimenticato'"). Apply either, which also re-renders that preview, then
+     open it again and ask again:
 
      ```
      clips/clips.py choose --event <event> --start 2=0:12 --end 2=0:58
+     clips/clips.py choose --event <event> --end-after 2="mila euro"
+     clips/clips.py choose --event <event> --start-at 2="mi sono dimenticato"
      ```
 
      `--start` / `--end` take a player time (seconds or `M:SS`) and may point
-     into the padding to extend the clip. `--reset ID` returns a candidate to
-     its snapped cut. Adjustments are kept per candidate and per edge until
-     replaced, so you can work through the clips one by one.
+     into the padding to extend the clip. `--start-at` / `--end-after` take
+     words copied exactly from the transcript (use a longer phrase if the
+     tool says it is ambiguous); the edge lands on a nearby pause when there
+     is one. Word times are rough, so an edge set by words is approximate:
+     the human confirms it on the re-rendered preview and can still nudge it
+     with a player time. `--reset ID` returns a candidate to its snapped cut.
+     Adjustments are kept per candidate and per edge until replaced, so you
+     can work through the clips one by one.
    - If the human wants a different span rather than a nudge (another
      sentence to start from, a punchline a few segments later), edit
      `start_seg` / `end_seg` and the quotes in `highlights.json`, re-run
