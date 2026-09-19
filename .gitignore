@@ -21,3 +21,8 @@
 .env
 .env.*
 !.env.example
+
+# Clips pipeline (see clips/README.md)
+# All run outputs and models: never committed.
+clips/work/
+clips/models/
