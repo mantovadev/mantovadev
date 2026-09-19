@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mantovadev.local/clips/schemas/highlights.schema.json",
+  "title": "Highlight candidates for an event",
+  "description": "clips/work/<event>/highlights.json. Candidate fields (id, start_seg, end_seg, start_quote, end_quote, score, hook, reason, needs_visuals) are written by the highlight-selection skill's agent step. The cut and chosen fields are written by snap_clip.py, not by the agent.",
+  "type": "object",
+  "required": ["event", "source_transcript", "candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Event date, YYYY-MM-DD."
+    },
+    "source_transcript": {
+      "type": "string",
+      "description": "Path to the transcript this file was built from, relative to the repo root, e.g. clips/work/2026-09-17/transcript.json."
+    },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "required": [
+        "id", "start_seg", "end_seg", "start_quote", "end_quote",
+        "score", "hook", "reason", "needs_visuals"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1..N, ranked best first (1 = best candidate)."
+        },
+        "start_seg": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index of the first segment of the clip (transcript.json segments[].i)."
+        },
+        "end_seg": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index of the last segment of the clip (inclusive)."
+        },
+        "start_quote": {
+          "type": "string",
+          "description": "Exact text of the first segment (start_seg), used as a checksum against the transcript."
+        },
+        "end_quote": {
+          "type": "string",
+          "description": "Exact text of the last segment (end_seg), used as a checksum against the transcript."
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "hook": {
+          "type": "string",
+          "description": "One line, in Italian, that would open the clip on socials."
+        },
+        "reason": {
+          "type": "string",
+          "description": "English: why this candidate works as a clip."
+        },
+        "needs_visuals": {
+          "type": "boolean",
+          "description": "True if the clip depends on the slides being readable to make sense."
+        },
+        "cut": { "$ref": "#/$defs/cut" },
+        "chosen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Set by the choose subcommand. True if a human picked this candidate to be cut."
+        }
+      }
+    },
+    "cut": {
+      "type": "object",
+      "description": "Written by snap_clip.py, not by the agent.",
+      "required": ["start", "end", "duration", "start_snapped", "end_snapped", "flags"],
+      "additionalProperties": false,
+      "properties": {
+        "segs": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[start_seg, end_seg] this cut was computed from. snap keeps manual_shift only while this span is unchanged."
+        },
+        "start": { "type": "number", "minimum": 0 },
+        "end": { "type": "number", "minimum": 0 },
+        "duration": { "type": "number", "minimum": 0 },
+        "start_snapped": {
+          "type": "boolean",
+          "description": "True if start was snapped to a detected silence edge."
+        },
+        "end_snapped": {
+          "type": "boolean",
+          "description": "True if end was snapped to a detected silence edge."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(too_short|too_long|quote_mismatch|overlaps_candidate_[0-9]+)$"
+          }
+        },
+        "manual_shift": {
+          "type": "object",
+          "description": "Human adjustment of each edge in seconds, relative to the snapped cut (set through choose --shift-start/--shift-end or --start/--end).",
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "number" },
+            "end": { "type": "number" }
+          }
+        },
+        "preview": {
+          "type": "object",
+          "description": "Written by the preview subcommand. origin is the source time of the preview file's first frame.",
+          "additionalProperties": false,
+          "required": ["file", "origin", "pad"],
+          "properties": {
+            "file": { "type": "string" },
+            "origin": { "type": "number", "minimum": 0 },
+            "pad": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}
