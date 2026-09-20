@@ -28,7 +28,12 @@
         "crop": {
           "type": "string",
           "pattern": "^[0-9]+:[0-9]+:[0-9]+:[0-9]+$",
-          "description": "W:H:X:Y in source pixels, set by the last `clips.py burn --crop ...` call and reused when --crop is omitted."
+          "description": "W:H:X:Y in source pixels for the whole event, set by `clips.py burn --crop ...` without --ids and reused when --crop is omitted."
+        },
+        "clips": {
+          "type": "object",
+          "description": "Crops for single clips, keyed by candidate id, set by `clips.py burn --ids ... --crop ...`. A clip listed here ignores the event crop: for when the speaker stands somewhere else, as in a Q&A.",
+          "additionalProperties": { "type": "string", "pattern": "^[0-9]+:[0-9]+:[0-9]+:[0-9]+$" }
         }
       }
     }

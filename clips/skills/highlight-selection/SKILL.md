@@ -115,12 +115,23 @@ indices and silence detection, not from anything you calculate.
      clearly mis-transcribed nonsense, prefer boundaries that avoid it, and
      mention the transcription doubt in `reason` so the human checks the
      preview.
-   - Length: hard limits are `too_short` under 15 s and `too_long` over 60 s.
+   - Length: the finished clip must be 15 to 60 s, and 25 to 50 s is the aim.
      Snapping can add up to about 1.5 s at the end and 0.35 s at the start, so
-     aim for 25 to 50 s by the `<mm:ss>` stamps and leave at least 5 s of
-     margin under 60 (do not do exact arithmetic; a rough glance at the
-     stamps is enough). Do not max out the length: shorter and punchier beats
-     a clip that drags to 59 s.
+     leave at least 5 s of margin under 60 (do not do exact arithmetic; a rough
+     glance at the `<mm:ss>` stamps is enough). Do not max out the length:
+     shorter and punchier beats a clip that drags to 59 s.
+   - Longer spans with drops: when the hook and the payoff sit either side of a
+     tangent, a stretch that needs the screen, or a repetition, the span may
+     run up to 110 s (`too_long` flags more), because `tighten` in
+     `produce-clip` later drops whole stretches from inside the clip. Use this
+     only when no contiguous span has both the hook and the payoff, and name
+     in `reason` the segments you would drop, so that what is left lands
+     under 60 s. Count on one to three large drops of whole sentences: a drop
+     can only start and end on a real pause, so it may have to be wider than
+     you planned, and every drop is a visible jump. `status` marks such a
+     candidate "over 60s: needs tighten --drop". In the long list and at the
+     review, show the human the text with the drops struck out: what to lose
+     is their call.
    - Candidates must not overlap in segment range with each other.
    - If a shortlisted moment turns out not to work once you look closely (no
      clean opening, no ending under 60 s), say so and propose the closest span
@@ -177,8 +188,9 @@ indices and silence detection, not from anything you calculate.
      text from the `render` output.
    - `too_short`: extend `end_seg` (or pull `start_seg` earlier) to include
      more of the thought, then re-run. Do not shrink the requirement instead.
-   - `too_long`: narrow `start_seg`/`end_seg` to the tightest self-contained
-     span, then re-run.
+   - `too_long` (over 110 s): narrow `start_seg`/`end_seg` to the tightest
+     self-contained span, then re-run. A span between 60 and 110 s is not
+     flagged, but it is only acceptable with drops planned (see Length above).
    - `overlaps_candidate_<id>`: adjust the segment ranges so candidates do not
      share segments.
    Re-run `snap` after every edit until no candidate has a blocking flag you

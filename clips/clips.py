@@ -16,7 +16,8 @@ Subcommands:
   status      print one block per candidate: id, score, chosen, range, ...
   cut         cut every chosen candidate from source.mp4
   align       transcribe a cut clip on its own for word-level timing
-  burn        build the .ass and render the final vertical clip
+  tighten     shorten the pauses inside a cut clip
+  burn       build the .ass and render the final vertical clip
 
 Run `clips.py <subcommand> --help` for each subcommand's options.
 """
@@ -27,6 +28,7 @@ import math
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -40,7 +42,8 @@ WORD_END_CLAMP_MS = 1500.0
 
 # snap: candidate duration thresholds and silence-snap windows.
 TOO_SHORT_S = 15.0
-TOO_LONG_S = 60.0
+TOO_LONG_S = 60.0       # the finished clip
+RAW_TOO_LONG_S = 110.0  # the cut itself may run longer, if tighten then drops stretches from it
 START_WINDOW = 1.0     # look for silence end within S-1.0 .. S+1.0
 END_WINDOW_PAD = 0.15  # look for silence start within Lw+0.15 .. E+1.0
 END_WINDOW_TAIL = 1.0
@@ -68,6 +71,27 @@ MAX_CHARS = 14          # upper case Aeonik Black at size 100: 15 chars fill abo
 GAP_BREAK = 0.45        # a pause this long always starts a new chunk
 BREAK_AFTER = ".?!,;:"  # punctuation that ends a chunk
 STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
+
+# tighten: pauses inside a cut clip are shortened, never removed whole. A pause is a
+# quiet run found by silencedetect on the clip itself, at the same noise floor as snap.
+TIGHT_DETECT_S = 0.15       # shortest quiet run silencedetect reports for tighten
+TIGHT_MERGE_S = 0.03        # quiet runs split by a click shorter than this count as one
+# Judged by ear on one clip: cutting every pause over 0.35 s down to 0.2 s sounded rushed.
+TIGHT_MIN_PAUSE = 0.7       # shorter pauses are speech rhythm and stay as they are
+TIGHT_GAP = 0.45            # what a pause is shortened to inside a sentence
+TIGHT_GAP_SENTENCE = 0.6    # ... and after a word ending in . ? !
+TIGHT_HEAD = 0.6            # share of the kept gap left right after the previous word
+                            # (consonant release, room tail); the rest leads into the next word
+TIGHT_MIN_CUT = 0.10        # do not bother splicing for less than this
+TIGHT_FADE = 0.025          # audio fade on each side of a splice: hides clicks, softens the room tone jump
+# tighten --drop: each edge of a dropped stretch moves onto the pause nearest to the start
+# of the word after that edge, searched this far before and after it.
+DROP_BACK = 0.6
+DROP_AHEAD = 0.3
+# Where the room is noisy (Q&A, audience) a pause does not get below SILENCE_NOISE. A drop
+# edge that finds no pause tries again at these louder floors.
+DROP_NOISE_LADDER = ("-30dB", "-25dB")
+DROP_SEP = " ... "          # --drop "ID=first words ... last words"
 
 CANVAS_W, CANVAS_H = 1080, 1920   # output is always vertical
 LOGO_W = 640             # logo width and top offset on the canvas
@@ -199,6 +223,22 @@ def ffprobe_fps(path: Path) -> str:
     if not re.match(r"^\d+/\d+$", fps) or fps.endswith("/0"):
         fail(f"could not read the frame rate of {path}")
     return fps
+
+
+def ffprobe_video(path: Path):
+    """(fps, start time, frame count) of the first video stream. The start time matters:
+    a cut clip's first frame often sits one frame after the audio start."""
+    proc = run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=r_frame_rate,start_time,nb_frames", "-of", "json", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        stream = json.loads(proc.stdout)["streams"][0]
+        num, den = (int(x) for x in stream["r_frame_rate"].split("/"))
+        return num / den, float(stream["start_time"]), int(stream["nb_frames"])
+    except (ValueError, KeyError, IndexError, ZeroDivisionError):
+        fail(f"could not read the frame rate, start time and frame count of {path}")
 
 
 def mmss(seconds: float) -> str:
@@ -575,11 +615,11 @@ SILENCE_START_RE = re.compile(r"silence_start:\s*(-?[\d.]+)")
 SILENCE_END_RE = re.compile(r"silence_end:\s*(-?[\d.]+)")
 
 
-def detect_silences(audio_path: Path):
+def detect_silences(audio_path: Path, min_s: float = SILENCE_MIN_S, noise: str = SILENCE_NOISE):
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-nostats", "-i", str(audio_path),
-             "-af", f"silencedetect=noise={SILENCE_NOISE}:d={SILENCE_MIN_S}", "-f", "null", "-"],
+            ["ffmpeg", "-hide_banner", "-nostats", "-vn", "-i", str(audio_path),
+             "-af", f"silencedetect=noise={noise}:d={min_s}", "-f", "null", "-"],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
@@ -673,7 +713,7 @@ def compute_cut(cand, segments, transcript, silence_cache):
     dur = round(end - start, 2)
     if dur < TOO_SHORT_S:
         flags.append("too_short")
-    if dur > TOO_LONG_S:
+    if dur > RAW_TOO_LONG_S:
         flags.append("too_long")
 
     return {
@@ -696,7 +736,7 @@ def refresh_duration(cut, duration_total=None):
     cut["flags"] = [f for f in cut["flags"] if f not in ("too_short", "too_long")]
     if cut["duration"] < TOO_SHORT_S:
         cut["flags"].append("too_short")
-    if cut["duration"] > TOO_LONG_S:
+    if cut["duration"] > RAW_TOO_LONG_S:
         cut["flags"].append("too_long")
 
 
@@ -856,7 +896,8 @@ def print_status(highlights, event, transcript):
         print(f"Candidate {cand['id']}: score {cand['score']}{marker}")
         print(f"  segments: {cand['start_seg']} to {cand['end_seg']}")
         if cut:
-            print(f"  range: {mmss(cut['start'])} to {mmss(cut['end'])} ({cut['duration']}s)")
+            over = f", over {TOO_LONG_S:.0f}s: needs tighten --drop" if cut["duration"] > TOO_LONG_S else ""
+            print(f"  range: {mmss(cut['start'])} to {mmss(cut['end'])} ({cut['duration']}s{over})")
             flags = ", ".join(cut["flags"]) if cut["flags"] else "none"
             print(f"  flags: {flags}")
             manual = cut.get("manual_shift") or {}
@@ -1293,6 +1334,325 @@ def read_words(path: Path):
     return words
 
 
+# ------------------------------------------------------------------ tighten
+
+def merge_quiet_runs(intervals, max_blip: float):
+    """Join quiet runs that only a click (shorter than max_blip) keeps apart."""
+    merged = []
+    for iv in intervals:
+        if merged and iv["start"] - merged[-1]["end"] <= max_blip:
+            merged[-1]["end"] = max(merged[-1]["end"], iv["end"])
+        else:
+            merged.append(dict(iv))
+    return merged
+
+
+def plan_pauses(words, quiet_runs, duration, fps, video_start):
+    """One cut per pause worth shortening, on the clip's video frame grid. The audio says
+    where a pause is, the words only say how much of it to keep: more after a sentence end.
+    Quiet runs touching the clip edges are left alone, those belong to snap and choose."""
+    cuts = []
+    for run_ in quiet_runs:
+        start, end = run_["start"], run_["end"]
+        if start <= 0.01 or end >= duration - 0.01 or end - start < TIGHT_MIN_PAUSE:
+            continue
+        before = [i for i, w in enumerate(words) if w["s"] <= start]
+        after = before[-1] if before else None
+        sentence_end = after is not None and words[after]["w"][-1:] in ".?!"
+        keep = TIGHT_GAP_SENTENCE if sentence_end else TIGHT_GAP
+        if end - start - keep < TIGHT_MIN_CUT:
+            continue
+        # Round inwards, so rounding never removes more than planned.
+        a = math.ceil((start + keep * TIGHT_HEAD - video_start) * fps - 1e-6)
+        b = math.floor((end - keep * (1 - TIGHT_HEAD) - video_start) * fps + 1e-6)
+        if b <= a:
+            continue
+        cuts.append({
+            "start_frame": a, "end_frame": b,
+            "start": round(video_start + a / fps, 3), "end": round(video_start + b / fps, 3),
+            "reason": "pause", "pause": round(end - start, 3),
+            "after": after, "after_word": words[after]["w"] if after is not None else "",
+            "apply": True,
+        })
+    return cuts
+
+
+def find_words(words, phrase: str, start: int = 0):
+    """Indices where the phrase begins in the words list, and its length in words."""
+    def norm(word):
+        return re.sub(r"[^\w']+", "", word.lower())
+    target = [norm(w) for w in phrase.split() if norm(w)]
+    normed = [norm(w["w"]) for w in words]
+    hits = [i for i in range(start, len(words) - len(target) + 1)
+            if target and normed[i:i + len(target)] == target]
+    return hits, len(target)
+
+
+def plan_drop(words, quiet_levels, fps, video_start, spec: str, clip_id):
+    """A cut that removes a stretch of speech, given by its words: "first words ... last
+    words", or one phrase to drop just that. Word times only find the two pauses, the
+    edges then sit inside them, and between them the pause left over is as long as any
+    other shortened pause."""
+    first, sep, last = spec.partition(DROP_SEP)
+    hits, n = find_words(words, first)
+    if len(hits) != 1:
+        fail(f"clip {clip_id}: \"{first.strip()}\" appears {len(hits)} times in the words file. Copy the "
+             "words as written there, and use more of them if they repeat.")
+    i = hits[0]
+    j = i + n - 1
+    if sep:
+        hits, n = find_words(words, last, i)
+        if not hits:
+            fail(f"clip {clip_id}: \"{last.strip()}\" not found after \"{first.strip()}\" in the words file")
+        j = hits[0] + n - 1
+    if i == 0 or j >= len(words) - 1:
+        fail(f"clip {clip_id}: this drop reaches the edge of the clip. Move the clip's start or end "
+             "with choose instead.")
+
+    def pause_near(t):
+        """The pause that ends closest to t, the start of the first word after an edge.
+        quiet_levels: the clip's quiet runs at SILENCE_NOISE, then at each louder floor."""
+        for runs in quiet_levels:
+            near = [r for r in runs if r["end"] >= t - DROP_BACK and r["start"] <= t + DROP_AHEAD]
+            if near:
+                return min(near, key=lambda r: abs(r["end"] - t))
+        return None
+
+    def first_pause_after(prev_word, t):
+        """The first pause once prev_word is over, up to t. Any hesitation between it and
+        the dropped words goes too."""
+        for runs in quiet_levels:
+            near = [r for r in runs if prev_word["s"] + 0.2 <= r["start"] <= t + DROP_AHEAD]
+            if near:
+                return min(near, key=lambda r: r["start"])
+        return None
+
+    before = first_pause_after(words[i - 1], words[i]["s"])
+    after = pause_near(words[j + 1]["s"])
+    if before is None or after is None:
+        where = "before" if before is None else "after"
+        fail(f"clip {clip_id}: no pause {where} \"{spec}\". A cut inside running speech splits words: "
+             "widen the drop to the nearest pauses, or leave it in.")
+    keep = TIGHT_GAP_SENTENCE if words[i - 1]["w"][-1:] in ".?!" else TIGHT_GAP
+    start = min(before["start"] + keep * TIGHT_HEAD, before["end"])
+    end = max(after["end"] - keep * (1 - TIGHT_HEAD), after["start"])
+    a = math.ceil((start - video_start) * fps - 1e-6)
+    b = math.floor((end - video_start) * fps + 1e-6)
+    if b <= a:
+        fail(f"clip {clip_id}: could not place the drop \"{spec}\" (word times out of order?)")
+    shown = [w["w"] for w in words[i:j + 1]]
+    return {
+        "start_frame": a, "end_frame": b,
+        "start": round(video_start + a / fps, 3), "end": round(video_start + b / fps, 3),
+        "reason": "drop", "from_index": i, "to_index": j,
+        "text": " ".join(shown) if len(shown) <= 8 else " ".join(shown[:4] + ["..."] + shown[-4:]),
+        "after": i - 1, "after_word": words[i - 1]["w"],
+        "apply": True,
+    }
+
+
+def dropped_words(cuts):
+    """Indices of the words that applied drops remove."""
+    gone = set()
+    for cut in cuts:
+        if cut["reason"] == "drop" and cut.get("apply", True):
+            gone.update(range(cut["from_index"], cut["to_index"] + 1))
+    return gone
+
+
+def keep_ranges(cuts, frames: int):
+    """Frame ranges [a, b) that survive the applied cuts, in order."""
+    keeps, pos = [], 0
+    for cut in sorted((c for c in cuts if c.get("apply", True)), key=lambda c: c["start_frame"]):
+        a, b = max(cut["start_frame"], pos), min(cut["end_frame"], frames)
+        if b <= a:
+            continue
+        if a > pos:
+            keeps.append((pos, a))
+        pos = b
+    if pos < frames:
+        keeps.append((pos, frames))
+    return keeps
+
+
+def tight_time(t: float, keeps, fps, video_start) -> float:
+    """Clip time -> time in the tightened clip. A time inside a removed range lands on
+    the splice."""
+    out = 0.0
+    for a, b in keeps:
+        s, e = video_start + a / fps, video_start + b / fps
+        if t < s:
+            return out
+        if t < e:
+            return out + (t - s)
+        out += e - s
+    return out
+
+
+def remap_words(words, keeps, fps, video_start, gone=()):
+    """The words of words.tsv moved onto the tightened clip's timeline, without the
+    dropped ones (gone: their indices)."""
+    out = []
+    for i, word in enumerate(words):
+        if i in gone:
+            continue
+        s = tight_time(word["s"], keeps, fps, video_start)
+        e = tight_time(word["e"], keeps, fps, video_start)
+        out.append({"w": word["w"], "s": s, "e": max(e, s + MIN_WORD)})
+    return out
+
+
+def tighten_graph(keeps, fps, video_start) -> str:
+    """trim/atrim each kept range and concat them. Video is trimmed half a frame early so a
+    frame timestamp never sits on a boundary; audio uses the exact frame times, so both
+    streams of a piece have the same length and concat has nothing to pad. (aselect would
+    only cut on whole audio frames and drift.)"""
+    n = len(keeps)
+    lines = [f"[0:v]split={n}" + "".join(f"[v{i}]" for i in range(n)),
+             f"[0:a]asplit={n}" + "".join(f"[a{i}]" for i in range(n))]
+    for i, (a, b) in enumerate(keeps):
+        vs = max(0.0, video_start + (a - 0.5) / fps)
+        ve = video_start + (b - 0.5) / fps
+        ts, te = video_start + a / fps, video_start + b / fps
+        lines.append(f"[v{i}]trim=start={vs:.6f}:end={ve:.6f},setpts=PTS-STARTPTS[pv{i}]")
+        fades = ""
+        if i > 0:
+            fades += f",afade=t=in:d={TIGHT_FADE}"
+        if i < n - 1:
+            fades += f",afade=t=out:st={te - ts - TIGHT_FADE:.6f}:d={TIGHT_FADE}"
+        lines.append(f"[a{i}]atrim=start={ts:.6f}:end={te:.6f},asetpts=PTS-STARTPTS{fades}[pa{i}]")
+    lines.append("".join(f"[pv{i}][pa{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]")
+    return ";\n".join(lines) + "\n"
+
+
+def print_tighten_report(clip_id, words, plan, keeps):
+    fps = plan["fps"]
+    duration = plan["frames"] / fps
+    applied = [c for c in plan["cuts"] if c.get("apply", True)]
+    tight = sum(b - a for a, b in keeps) / fps
+    removed = duration - tight
+    print(f"Clip {clip_id}: {duration:.1f} s -> {tight:.1f} s "
+          f"({removed:.1f} s out, {100 * removed / duration:.0f}%), "
+          f"{len(applied)} of {len(plan['cuts'])} cuts applied")
+    for n, cut in enumerate(plan["cuts"], 1):
+        length = cut["end"] - cut["start"]
+        if not cut.get("apply", True):
+            state = "kept as it is"
+        elif cut["reason"] == "drop":
+            state = f"dropped \"{cut['text']}\", {length:.1f} s out"
+        else:
+            state = f"pause {cut['pause']:.2f} s -> {cut['pause'] - length:.2f} s"
+        print(f"  [{n}] {clock(cut['start'])} after \"{cut['after_word']}\": {state}")
+    marks = {}
+    for n, cut in enumerate(plan["cuts"], 1):
+        if cut.get("apply", True):
+            marks.setdefault(cut["after"], []).append(f"[{n}]")
+    gone = dropped_words(plan["cuts"])
+    text = " ".join(marks.get(None, []))
+    for i, word in enumerate(words):
+        if i not in gone:
+            text += " " + " ".join([word["w"]] + marks.get(i, []))
+    print(textwrap.fill(text.strip(), width=100, initial_indent="  ", subsequent_indent="  "))
+    if tight > TOO_LONG_S:
+        print(f"  warning: still over {TOO_LONG_S:.0f} s. Drop more, or move the clip's start or end with choose.")
+
+
+def _tighten_one(work_dir, event, clip_id, args):
+    final, base = clip_paths(work_dir, clip_id)
+    clip = base.with_suffix(".mp4")
+    words_path = Path(str(base) + ".words.tsv")
+    plan_path = Path(str(base) + ".tighten.json")
+    graph_name = f"clip_{clip_id}.tighten.graph"
+    out_name = f"clip_{clip_id}.tight.mp4"
+    if not clip.is_file():
+        fail(f"{clip} not found. Run the cut subcommand first.")
+    if not words_path.is_file():
+        fail(f"{words_path} not found. Run the align subcommand first.")
+
+    words = read_words(words_path)
+    fps, video_start, frames = ffprobe_video(clip)
+    drops = [spec for cid, spec in args.drops if cid == clip_id]
+    runs = None
+    if plan_path.is_file() and not args.replan:
+        plan = load_json(plan_path, "tighten plan")
+        if plan.get("frames") != frames or plan.get("words", len(words)) != len(words):
+            fail(f"{plan_path} was made for a different cut or words file of this clip (use --replan)")
+        print(f"Using {plan_path} as it is, hand edits included (--replan recomputes it).")
+    else:
+        runs = merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S), TIGHT_MERGE_S)
+        plan = {
+            "fps": fps, "video_start": video_start, "frames": frames, "words": len(words),
+            "cuts": plan_pauses(words, runs, ffprobe_duration(clip), fps, video_start),
+        }
+    if drops:
+        levels = [merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S, noise), TIGHT_MERGE_S)
+                  for noise in (SILENCE_NOISE,) + DROP_NOISE_LADDER]
+    for spec in drops:
+        drop = plan_drop(words, levels, fps, video_start, spec, clip_id)
+        # The drop takes over any cut it overlaps, such as a pause inside the dropped stretch.
+        plan["cuts"] = sorted(
+            [c for c in plan["cuts"]
+             if c["end_frame"] <= drop["start_frame"] or c["start_frame"] >= drop["end_frame"]] + [drop],
+            key=lambda c: c["start_frame"])
+    if drops or runs is not None:
+        save_json(plan_path, plan)
+        print(f"Wrote {plan_path}")
+
+    keeps = keep_ranges(plan["cuts"], frames)
+    print_tighten_report(clip_id, words, plan, keeps)
+    if len(keeps) < 2:
+        print("  nothing to tighten: burn will use the clip as it is.")
+        return
+
+    (final / graph_name).write_text(tighten_graph(keeps, fps, video_start), encoding="utf-8")
+    # One decode, one encode, run inside final/ like burn. The graph goes in a file:
+    # a long clip has dozens of pieces.
+    proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", clip.name,
+                "-/filter_complex", graph_name, "-map", "[v]", "-map", "[a]",
+                "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_name], cwd=final)
+    if proc.returncode != 0:
+        fail(f"ffmpeg failed tightening clip {clip_id}")
+    print(f"Wrote {final / out_name}. Watch it, then run: clips.py burn --event {event} --ids {clip_id}")
+
+
+def cmd_tighten(args, root: Path, work_dir: Path):
+    args.drops = []
+    for pair in args.drop or []:
+        id_str, sep, spec = pair.partition("=")
+        if not sep or not id_str.strip().isdigit() or not spec.strip():
+            fail(f"invalid --drop (expected ID=first words{DROP_SEP}last words): {pair}")
+        args.drops.append((int(id_str), spec.strip()))
+    ids = _resolve_ids_default_chosen(args, work_dir)
+    stray = sorted({cid for cid, _ in args.drops} - set(ids))
+    if stray:
+        fail(f"--drop names clip(s) {stray} that this run does not tighten (check --ids)")
+    for clip_id in ids:
+        _tighten_one(work_dir, args.event, clip_id, args)
+
+
+def tightened_inputs(base: Path, clip: Path, words):
+    """(clip, words) for burn: the tightened pair when tighten has shortened something."""
+    plan_path = Path(str(base) + ".tighten.json")
+    if not plan_path.is_file():
+        return clip, words
+    plan = load_json(plan_path, "tighten plan")
+    keeps = keep_ranges(plan["cuts"], plan["frames"])
+    if len(keeps) < 2:
+        return clip, words
+    tight = Path(str(base) + ".tight.mp4")
+    expected = sum(b - a for a, b in keeps) / plan["fps"]
+    if not tight.is_file() or abs(ffprobe_duration(tight) - expected) > 0.1:
+        fail(f"{tight} is missing or older than {plan_path}. Run the tighten subcommand again, "
+             f"or pass --no-tighten.")
+    if plan.get("words", len(words)) != len(words):
+        fail(f"{base}.words.tsv no longer has the word count {plan_path} was made for. "
+             f"Run tighten --replan (and give the drops again).")
+    return tight, remap_words(words, keeps, plan["fps"], plan["video_start"], dropped_words(plan["cuts"]))
+
+
+# ------------------------------------------------------------------ burn
+
 def make_chunks(words):
     chunks, cur = [], []
     for word in words:
@@ -1358,23 +1718,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def read_burn_crop(highlights_path: Path, given_crop):
-    """--crop is remembered per event: store it top-level in highlights.json as
-    "burn": {"crop": "W:H:X:Y"}; reuse the stored value when --crop is omitted."""
-    highlights = None
-    if highlights_path.is_file():
-        highlights = load_json(highlights_path, "highlights.json")
+def read_burn_crops(highlights_path: Path, given_crop, ids, for_ids_only: bool):
+    """{clip id: crop or None}. --crop is remembered in highlights.json under "burn": for the
+    whole event ("crop"), or, when given together with --ids, for just those clips ("clips",
+    for when the speaker stands somewhere else). A clip's own crop wins over the event's."""
+    if given_crop and not re.match(r"^\d+:\d+:\d+:\d+$", given_crop):
+        fail(f"--crop must be W:H:X:Y in source pixels, got: {given_crop}")
+    if not highlights_path.is_file():
+        return {i: given_crop for i in ids}  # nowhere to remember it
+    highlights = load_json(highlights_path, "highlights.json")
+    burn = highlights.setdefault("burn", {})
     if given_crop:
-        if not re.match(r"^\d+:\d+:\d+:\d+$", given_crop):
-            fail(f"--crop must be W:H:X:Y in source pixels, got: {given_crop}")
-        if highlights is not None:
-            highlights.setdefault("burn", {})["crop"] = given_crop
-            save_json(highlights_path, highlights)
-        return given_crop
-    if highlights is not None:
-        burn = highlights.get("burn") or {}
-        return burn.get("crop")
-    return None
+        if for_ids_only:
+            burn.setdefault("clips", {}).update({str(i): given_crop for i in ids})
+        else:
+            burn["crop"] = given_crop
+        save_json(highlights_path, highlights)
+    own = burn.get("clips") or {}
+    return {i: own.get(str(i), burn.get("crop")) for i in ids}
 
 
 def _burn_one(root, work_dir, clip_id, args, crop):
@@ -1394,6 +1755,8 @@ def _burn_one(root, work_dir, clip_id, args, crop):
     style["uppercase"] = not args.keep_case
 
     words = read_words(words_path)
+    if not args.no_tighten:
+        clip, words = tightened_inputs(base, clip, words)
     width, height = ffprobe_size(clip)
     encode = ["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
               "-c:a", "copy", "-movflags", "+faststart"]
@@ -1411,9 +1774,13 @@ def _burn_one(root, work_dir, clip_id, args, crop):
     video_y = max(LOGO_Y + 200, (CANVAS_H - video_h) // 2 - 140)
     ass_name = f"clip_{clip_id}.ass"
     out_name = f"clip_{clip_id}.final.mp4"
+    duration = ffprobe_duration(clip)
+    if duration > TOO_LONG_S:
+        # snap lets a cut run to RAW_TOO_LONG_S on the promise that tighten shortens it
+        print(f"warning: clip {clip_id} is {duration:.0f} s, over {TOO_LONG_S:.0f} s. Drop stretches with tighten first.")
     (final / ass_name).write_text(
         build_ass(words, style, caption_top=video_y + video_h + 120,
-                  footer=args.footer, duration=ffprobe_duration(clip)),
+                  footer=args.footer, duration=duration),
         encoding="utf-8-sig")
     graph = (
         f"[0:v]{crop_filter},scale={CANVAS_W}:{video_h}[v];"
@@ -1435,10 +1802,10 @@ def _burn_one(root, work_dir, clip_id, args, crop):
 
 def cmd_burn(args, root: Path, work_dir: Path):
     highlights_path = work_dir / "highlights.json"
-    crop = read_burn_crop(highlights_path, args.crop)
     ids = _resolve_ids_default_chosen(args, work_dir)
+    crops = read_burn_crops(highlights_path, args.crop, ids, for_ids_only=bool(args.ids))
     for clip_id in ids:
-        _burn_one(root, work_dir, clip_id, args, crop)
+        _burn_one(root, work_dir, clip_id, args, crops[clip_id])
 
 
 # ==================================================================
@@ -1528,6 +1895,17 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="Overwrite an existing words file (loses edits).")
     p.set_defaults(func=cmd_align)
 
+    p = sub.add_parser("tighten", help="Shorten the pauses inside cut clip(s): writes a plan and final/clip_<id>.tight.mp4.")
+    add_common(p)
+    p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
+    p.add_argument("--drop", action="append", metavar="ID=WORDS",
+                   help="Remove a stretch of speech, quoted from the words file: "
+                        "3=\"first words ... last words\", or one phrase to drop just that. Each edge "
+                        "must land on a pause, or the drop is refused. Added to the plan. Repeatable.")
+    p.add_argument("--replan", action="store_true",
+                   help="Recompute an existing plan (loses its drops and hand edits such as \"apply\": false).")
+    p.set_defaults(func=cmd_tighten)
+
     p = sub.add_parser("burn", help="Build the .ass from the words file and burn it into the final vertical clip.")
     add_common(p)
     p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
@@ -1536,9 +1914,11 @@ def build_parser():
     p.add_argument("--active", help=f"Highlight colour as ASS &HAABBGGRR (default: {DEFAULT_STYLE['active']}).")
     p.add_argument("--keep-case", action="store_true", help="Keep the words as written instead of showing them in upper case.")
     p.add_argument("--crop", metavar="W:H:X:Y",
-                   help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0. Remembered per "
-                        "event in highlights.json; omit to reuse the stored value.")
+                   help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0. Remembered in "
+                        "highlights.json: for the whole event, or with --ids for just those clips (their "
+                        "own crop then wins). Omit to reuse the stored value.")
     p.add_argument("--footer", default="https://mantova.dev", help="Text at the bottom of the canvas (default: https://mantova.dev).")
+    p.add_argument("--no-tighten", action="store_true", help="Burn the clip as cut, even if tighten has shortened it.")
     p.set_defaults(func=cmd_burn)
 
     return parser

@@ -14,11 +14,16 @@ One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
 | 1 | `skills/ingest` | `ingest` | which file, which audio track |
 | 2 | `skills/transcript-extract` | `transcribe`, `render` | nothing (agent sanity-checks the text) |
 | 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which moments from the agent's long list to preview (plus your own), then which to keep and where each starts and ends |
-| 4 | `skills/produce-clip` | `cut`, `align`, `burn` | caption text fixes, final approval, post text |
+| 4 | `skills/produce-clip` | `cut`, `align`, `tighten`, `burn` | caption text fixes, what to drop from inside a clip, final approval, post text |
 
 To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
 for event 2026-09-17, follow `clips/README.md`". Every command takes
 `--event <YYYY-MM-DD>`; `clips/clips.py <command> --help` lists the options.
+
+A clip does not have to be one unbroken stretch of the talk. When the hook and the
+payoff sit either side of a tangent, the cut can run up to 110 s and `tighten` then
+drops the stretches you agree to lose (always on real pauses, a few large ones, never
+reordering what was said) and shortens long pauses, to land under 60 s.
 
 The review loops are interactive: the agent proposes, opens a preview file for you,
 you answer in plain words ("start at 0:12", "drop this one", "it's CPU, not cp"), it
