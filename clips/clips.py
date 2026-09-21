@@ -34,8 +34,8 @@ from typing import NoReturn, Optional
 
 # ---------------------------------------------------------------- tuning
 
-# transcribe: end-time clamp. Whisper word end times absorb
-# trailing silence (some spans were 50+ seconds in an earlier run). Each
+# transcribe: end-time clamp. Whisper word end times absorb the silence that
+# follows the word, so a raw end can lie far past the spoken word. Each
 # word's end is clamped to the earliest of: its own raw end, the next word's
 # start, and its own start + 1.5s.
 WORD_END_CLAMP_MS = 1500.0
@@ -43,14 +43,14 @@ WORD_END_CLAMP_MS = 1500.0
 # snap: candidate duration thresholds and silence-snap windows.
 TOO_SHORT_S = 15.0
 TOO_LONG_S = 60.0       # the finished clip
-RAW_TOO_LONG_S = 110.0  # the cut itself may run longer, if tighten then drops stretches from it
+RAW_TOO_LONG_S = 120.0  # the cut itself may run longer, if tighten then drops stretches from it
 START_WINDOW = 1.0     # look for silence end within S-1.0 .. S+1.0
 END_WINDOW_PAD = 0.15  # look for silence start within Lw+0.15 .. E+1.0
 END_WINDOW_TAIL = 1.0
 MAX_LEAD = 0.35
 MAX_TAIL = 0.45
-# What counts as a pause (ffmpeg silencedetect). Tuned on one room recording: a noisier
-# room may need a higher noise floor (e.g. -30dB), a quieter one a lower one.
+# What counts as a pause (ffmpeg silencedetect). The right noise floor depends on the
+# room: raise it (e.g. -30dB) for a noisy room, lower it for a quiet one.
 SILENCE_NOISE = "-35dB"
 SILENCE_MIN_S = 0.4
 PREVIEW_PAD = 5.0
@@ -76,7 +76,8 @@ STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
 # quiet run found by silencedetect on the clip itself, at the same noise floor as snap.
 TIGHT_DETECT_S = 0.15       # shortest quiet run silencedetect reports for tighten
 TIGHT_MERGE_S = 0.03        # quiet runs split by a click shorter than this count as one
-# Judged by ear on one clip: cutting every pause over 0.35 s down to 0.2 s sounded rushed.
+# Only long pauses are touched, and they keep about half a second: short pauses are
+# speech rhythm, and a speaker without them sounds rushed.
 TIGHT_MIN_PAUSE = 0.7       # shorter pauses are speech rhythm and stay as they are
 TIGHT_GAP = 0.45            # what a pause is shortened to inside a sentence
 TIGHT_GAP_SENTENCE = 0.6    # ... and after a word ending in . ? !
@@ -369,9 +370,9 @@ SPECIAL_TOKEN_RE = re.compile(r"^\[_.*\]$")
 
 
 def seg_shift(seg, vad: bool) -> float:
-    """VAD timeline fix: with --vad, whisper-cli (1.9.4) reports segment offsets on the
-    original audio timeline but token offsets on the VAD-compressed timeline (silence
-    removed), so token times drift earlier and earlier (over 1100 s on a 68 min talk).
+    """VAD timeline fix: with --vad, whisper-cli (as of 1.9.4) reports segment offsets on
+    the original audio timeline but token offsets on the VAD-compressed timeline (silence
+    removed), so token times fall behind by all the silence removed before them.
     When vad is true, shift each segment's tokens so its first real token lands on the
     segment start. Silence removed INSIDE a segment is not recovered, so words after an
     internal pause can be early by the length of that pause."""

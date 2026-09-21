@@ -17,11 +17,11 @@ One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
 | 4 | `skills/produce-clip` | `cut`, `align`, `tighten`, `burn` | caption text fixes, what to drop from inside a clip, final approval, post text |
 
 To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
-for event 2026-09-17, follow `clips/README.md`". Every command takes
+for event <YYYY-MM-DD>, follow `clips/README.md`". Every command takes
 `--event <YYYY-MM-DD>`; `clips/clips.py <command> --help` lists the options.
 
 A clip does not have to be one unbroken stretch of the talk. When the hook and the
-payoff sit either side of a tangent, the cut can run up to 110 s and `tighten` then
+payoff sit either side of a tangent, the cut can run up to 120 s and `tighten` then
 drops the stretches you agree to lose (always on real pauses, a few large ones, never
 reordering what was said) and shortens long pauses, to land under 60 s.
 

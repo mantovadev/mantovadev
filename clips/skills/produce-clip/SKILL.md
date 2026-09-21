@@ -15,7 +15,7 @@ and TikTok:
    editable words file.
 3. `tighten` (optional, per clip): drops stretches of speech the human agreed to lose
    (a tangent, a stretch that needs the screen, a false start) and shortens long
-   pauses. This is how a raw cut of up to 110 s becomes a clip under 60 s.
+   pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
 4. `burn`: renders a 1080x1920 canvas in the Mantova Dev look: dark brand background,
    logo on top, the picture at full width, word-by-word captions below it (upper
    case, up to 3 words at a time, the spoken word highlighted in brand turquoise) and
@@ -74,8 +74,7 @@ In `clips/work/<event>/final/`, per clip:
 2. Choose the crop, once per event. Extract one frame
    (`ffmpeg -ss 10 -i clips/work/<event>/final/clip_<id>.mp4 -frames:v 1 frame.jpg`),
    look at it, and pick the rectangle that keeps the speaker and the slides and drops
-   dead space (for the 2026-09-17 room: `1440:1080:0:0`). With a fixed camera one
-   rectangle serves the whole event. No crop is fine too: the whole frame is shown,
+   dead space. With a fixed camera one rectangle serves the whole event. No crop is fine too: the whole frame is shown,
    smaller. Check one frame of every clip all the same: when the speaker has moved
    (standing for the Q&A, away from the desk), give that clip its own rectangle with
    `burn --ids <id> --crop ...`.
@@ -95,8 +94,8 @@ In `clips/work/<event>/final/`, per clip:
    human wants something out. Skip it for the others.
 
    ```
-   clips/clips.py tighten --event <event> --ids 4 \
-     --drop '4=Diciamo che se anche ... non gliela faccio vedere.'
+   clips/clips.py tighten --event <event> --ids <id> \
+     --drop '<id>=<first words> ... <last words>'
    ```
 
    - What to drop is an editorial choice the human makes. Propose it in the chat as
@@ -111,8 +110,8 @@ In `clips/work/<event>/final/`, per clip:
      cost a sentence you wanted to keep, or leave the stretch in. The report prints the
      remaining text: read it again after widening.
    - Pauses of 0.7 s or more are shortened to about half a second. Shorter ones are
-     speech rhythm and stay: cutting them sounded rushed when we tried. On a fluent
-     speaker this gains a few percent, so it is polish, not the point.
+     speech rhythm and stay: a speaker without them sounds rushed. On a fluent speaker
+     this gains little: the drops are what shortens a clip.
    - The clip's start and end are not `tighten`'s job. If the cut opens on the tail
      of the previous sentence or ends mid-thought, fix it with `choose` (see "Order
      matters" below). A clip that ends on the speaker's own closing line and a real
@@ -124,7 +123,7 @@ In `clips/work/<event>/final/`, per clip:
 6. Burn (pass `--crop` the first time):
 
    ```
-   clips/clips.py burn --event <event> --crop 1440:1080:0:0
+   clips/clips.py burn --event <event> --crop <W:H:X:Y>
    ```
 
 7. Open each `clip_<id>.final.mp4` for the human (`open` on macOS, `xdg-open` on
@@ -162,12 +161,12 @@ must be redone. Whisper also words things a little differently on each run: copy
 after `tighten` needs `tighten --replan` too; changing a word or a time does not.
 
 Why drops need pauses: a cut inside running speech clips consonants however good the
-word times are, and on this footage the jump is visible too. Pauses are measured on
-the clip's audio, first at the noise floor `snap` uses, then at two louder floors,
-because a noisy stretch (Q&A, audience) never gets that quiet. We tried a zoom change
-at each drop to make the jump look deliberate: it added little, so it was left out.
+word times are, and with a fixed wide camera the jump shows too. Pauses are measured
+on the clip's audio, first at the noise floor `snap` uses, then at two louder floors,
+because a noisy stretch (Q&A, audience) never gets that quiet. A drop is a plain cut:
+no zoom and no transition.
 
 Why per-clip alignment: word times in the full-talk transcript are only good to about
 half a second. Re-transcribing the short clip without VAD and with DTW token
-timestamps (`-dtw`, which needs flash attention off) put no word start inside a
-detected pause in our test, against 12 to 14% with the default timestamps.
+timestamps (`-dtw`, which needs flash attention off) puts word starts on the audible
+onsets. The default timestamps often place a word inside the pause before it.

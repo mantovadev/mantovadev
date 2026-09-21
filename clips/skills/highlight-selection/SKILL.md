@@ -122,7 +122,7 @@ indices and silence detection, not from anything you calculate.
      shorter and punchier beats a clip that drags to 59 s.
    - Longer spans with drops: when the hook and the payoff sit either side of a
      tangent, a stretch that needs the screen, or a repetition, the span may
-     run up to 110 s (`too_long` flags more), because `tighten` in
+     run up to 120 s (`too_long` flags more), because `tighten` in
      `produce-clip` later drops whole stretches from inside the clip. Use this
      only when no contiguous span has both the hook and the payoff, and name
      in `reason` the segments you would drop, so that what is left lands
@@ -155,8 +155,8 @@ indices and silence detection, not from anything you calculate.
 
    ```json
    {
-     "event": "2026-09-17",
-     "source_transcript": "clips/work/2026-09-17/transcript.json",
+     "event": "<YYYY-MM-DD>",
+     "source_transcript": "clips/work/<YYYY-MM-DD>/transcript.json",
      "candidates": [
        {
          "id": 1,
@@ -188,8 +188,8 @@ indices and silence detection, not from anything you calculate.
      text from the `render` output.
    - `too_short`: extend `end_seg` (or pull `start_seg` earlier) to include
      more of the thought, then re-run. Do not shrink the requirement instead.
-   - `too_long` (over 110 s): narrow `start_seg`/`end_seg` to the tightest
-     self-contained span, then re-run. A span between 60 and 110 s is not
+   - `too_long` (over 120 s): narrow `start_seg`/`end_seg` to the tightest
+     self-contained span, then re-run. A span between 60 and 120 s is not
      flagged, but it is only acceptable with drops planned (see Length above).
    - `overlaps_candidate_<id>`: adjust the segment ranges so candidates do not
      share segments.

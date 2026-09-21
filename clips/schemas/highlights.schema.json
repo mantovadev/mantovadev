@@ -14,7 +14,7 @@
     },
     "source_transcript": {
       "type": "string",
-      "description": "Path to the transcript this file was built from, relative to the repo root, e.g. clips/work/2026-09-17/transcript.json."
+      "description": "Path to the transcript this file was built from, relative to the repo root, e.g. clips/work/<event>/transcript.json."
     },
     "candidates": {
       "type": "array",
