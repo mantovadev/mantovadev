@@ -1007,14 +1007,13 @@ def cmd_choose(args, root: Path, work_dir: Path):
     transcript = load_json(transcript_path, "transcript.json")
     validate_transcript(transcript, transcript_path)
 
-    chosen_ids = None  # None = leave the chosen flags as they are
-    if args.ids is not None:
-        chosen_ids = parse_ids(args.ids)
+    chosen_ids = parse_ids(args.ids) if args.ids else set()
+    unchosen_ids = parse_ids(args.unchoose) if args.unchoose else set()
 
     known_ids = {c["id"] for c in highlights["candidates"]}
-    unknown = (chosen_ids or set()) - known_ids
+    unknown = (chosen_ids | unchosen_ids) - known_ids
     if unknown:
-        fail(f"--ids references unknown candidate id(s): {sorted(unknown)} (known: {sorted(known_ids)})")
+        fail(f"unknown candidate id(s): {sorted(unknown)} (known: {sorted(known_ids)})")
 
     at_start = parse_id_times(args.start)
     at_end = parse_id_times(args.end)
@@ -1044,7 +1043,7 @@ def cmd_choose(args, root: Path, work_dir: Path):
     duration_total = ffprobe_duration(audio_path) if audio_path.is_file() else None
 
     for cand in highlights["candidates"]:
-        if chosen_ids is not None:
+        if cand["id"] in chosen_ids | unchosen_ids:
             cand["chosen"] = cand["id"] in chosen_ids
         cut = cand.get("cut")
         if cut is None:
@@ -1719,24 +1718,24 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def read_burn_crops(highlights_path: Path, given_crop, ids, for_ids_only: bool):
-    """{clip id: crop or None}. --crop is remembered in highlights.json under "burn": for the
-    whole event ("crop"), or, when given together with --ids, for just those clips ("clips",
-    for when the speaker stands somewhere else). A clip's own crop wins over the event's."""
-    if given_crop and not re.match(r"^\d+:\d+:\d+:\d+$", given_crop):
-        fail(f"--crop must be W:H:X:Y in source pixels, got: {given_crop}")
+def clip_crops(highlights_path: Path, given_crop, ids):
+    """{clip id: crop or None}. A crop belongs to a clip, because the speaker and the
+    camera can move between clips: --crop is stored on every candidate this run burns
+    ("none" clears it) and later burns of that clip reuse it. No crop shows the whole frame."""
+    if given_crop and given_crop != "none" and not re.match(r"^\d+:\d+:\d+:\d+$", given_crop):
+        fail(f"--crop must be W:H:X:Y in source pixels, or none, got: {given_crop}")
+    new_crop = None if given_crop == "none" else given_crop
     if not highlights_path.is_file():
-        return {i: given_crop for i in ids}  # nowhere to remember it
+        return {i: new_crop for i in ids}  # nowhere to remember it
     highlights = load_json(highlights_path, "highlights.json")
-    burn = highlights.setdefault("burn", {})
+    cands = {c["id"]: c for c in highlights["candidates"] if c["id"] in ids}
     if given_crop:
-        if for_ids_only:
-            burn.setdefault("clips", {}).update({str(i): given_crop for i in ids})
-        else:
-            burn["crop"] = given_crop
+        for cand in cands.values():
+            cand.pop("crop", None)
+            if new_crop:
+                cand["crop"] = new_crop
         save_json(highlights_path, highlights)
-    own = burn.get("clips") or {}
-    return {i: own.get(str(i), burn.get("crop")) for i in ids}
+    return {i: cands[i].get("crop") if i in cands else new_crop for i in ids}
 
 
 def _burn_one(root, work_dir, clip_id, args, crop):
@@ -1804,7 +1803,7 @@ def _burn_one(root, work_dir, clip_id, args, crop):
 def cmd_burn(args, root: Path, work_dir: Path):
     highlights_path = work_dir / "highlights.json"
     ids = _resolve_ids_default_chosen(args, work_dir)
-    crops = read_burn_crops(highlights_path, args.crop, ids, for_ids_only=bool(args.ids))
+    crops = clip_crops(highlights_path, args.crop, ids)
     for clip_id in ids:
         _burn_one(root, work_dir, clip_id, args, crops[clip_id])
 
@@ -1861,8 +1860,9 @@ def build_parser():
 
     p = sub.add_parser("choose", help="Mark candidates as chosen and optionally adjust their cut points.")
     add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids to mark chosen, e.g. 1,3 (all others become "
-                                 "unchosen). Omit to leave the chosen flags unchanged while adjusting cuts.")
+    p.add_argument("--ids", help="Comma-separated candidate ids to mark chosen, e.g. 2. The others keep their "
+                                 "state, so clips can be chosen one at a time.")
+    p.add_argument("--unchoose", metavar="IDS", help="Comma-separated candidate ids to mark as not chosen.")
     p.add_argument("--start", action="append", metavar="ID=TIME",
                    help="Set a candidate's cut start from a time read off its preview file (seconds or M:SS). "
                         "Needs a rendered preview. Repeatable.")
@@ -1915,9 +1915,9 @@ def build_parser():
     p.add_argument("--active", help=f"Highlight colour as ASS &HAABBGGRR (default: {DEFAULT_STYLE['active']}).")
     p.add_argument("--keep-case", action="store_true", help="Keep the words as written instead of showing them in upper case.")
     p.add_argument("--crop", metavar="W:H:X:Y",
-                   help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0. Remembered in "
-                        "highlights.json: for the whole event, or with --ids for just those clips (their "
-                        "own crop then wins). Omit to reuse the stored value.")
+                   help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0, so the content "
+                        "shows bigger. Stored on each clip this run burns and reused by its later burns; "
+                        "\"none\" clears it. Without a crop the whole frame is shown.")
     p.add_argument("--footer", default="https://mantova.dev", help="Text at the bottom of the canvas (default: https://mantova.dev).")
     p.add_argument("--no-tighten", action="store_true", help="Burn the clip as cut, even if tighten has shortened it.")
     p.set_defaults(func=cmd_burn)

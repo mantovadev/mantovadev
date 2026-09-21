@@ -13,12 +13,15 @@ One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
 |------|-------|----------|---------------|
 | 1 | `skills/ingest` | `ingest` | which file, which audio track |
 | 2 | `skills/transcript-extract` | `transcribe`, `render` | nothing (agent sanity-checks the text) |
-| 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which moments from the agent's long list to preview (plus your own), then which to keep and where each starts and ends |
+| 3 | `skills/highlight-selection` | `snap`, `preview`, `choose`, `status` | which moment from the agent's long list to work on next (or one of your own), whether to keep it, where it starts and ends |
 | 4 | `skills/produce-clip` | `cut`, `align`, `tighten`, `burn` | caption text fixes, what to drop from inside a clip, final approval, post text |
 
 To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
 for event <YYYY-MM-DD>, follow `clips/README.md`". Every command takes
 `--event <YYYY-MM-DD>`; `clips/clips.py <command> --help` lists the options.
+
+Clips are made one at a time: steps 3 and 4 run once per clip, from picking the moment
+to the finished file, and after each clip you decide whether to make another.
 
 A clip does not have to be one unbroken stretch of the talk. When the hook and the
 payoff sit either side of a tangent, the cut can run up to 120 s and `tighten` then
@@ -67,8 +70,8 @@ brew install ffmpeg-full whisper-cpp
   tracks.
 - If practical, put the speaker's microphone on its own audio track in addition to
   the full mix: it transcribes better.
-- Keep the camera fixed, with the speaker and the slides both in frame: one crop
-  rectangle then serves the whole talk.
+- Keep the camera fixed, with the speaker and the slides both in frame and as little
+  dead space around them as the room allows.
 
 ## Before publishing
 

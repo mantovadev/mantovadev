@@ -2,18 +2,19 @@
 
 ## Trigger
 
-`highlight-selection` is done: the human has chosen candidates (`chosen: true` in
-`clips/work/<event>/highlights.json`) and their cut points are settled.
+The human has kept a candidate in `highlight-selection` (`chosen: true` in
+`clips/work/<event>/highlights.json`) and its cut points are settled. This skill
+takes that one clip to the finish, before any other clip is started.
 
 ## What it does
 
-Turns each chosen candidate into a finished vertical clip, ready for Shorts, Reels
+Turns the chosen candidate into a finished vertical clip, ready for Shorts, Reels
 and TikTok:
 
 1. `cut`: frame-accurate cut of the source at full quality.
 2. `align`: transcribes that clip on its own for precise word timing and writes an
    editable words file.
-3. `tighten` (optional, per clip): drops stretches of speech the human agreed to lose
+3. `tighten` (optional): drops stretches of speech the human agreed to lose
    (a tangent, a stretch that needs the screen, a false start) and shortens long
    pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
 4. `burn`: renders a 1080x1920 canvas in the Mantova Dev look: dark brand background,
@@ -22,20 +23,21 @@ and TikTok:
    `https://mantova.dev` at the bottom.
 
 The human reviews the words and the result. The step ends with a proposed post text
-for each approved clip, given in the chat. You never publish anything.
+for the approved clip, given in the chat. You never publish anything.
 
 ## Inputs
 
 - `--event <YYYY-MM-DD>`. Required by every subcommand.
-- `--ids 1,3`: optional everywhere; the default is every chosen candidate.
+- `--ids <id>`: the clip you are working on. Pass it on every command: without it a
+  command acts on every chosen candidate.
 - `tighten --drop 'ID=first words ... last words'`: remove that stretch of speech
   (one phrase without ` ... ` drops just that phrase). Repeatable. `--replan`: start
   the plan over. How pauses are shortened is set by the `TIGHT_*` values at the top of
   `clips/clips.py`.
-- `burn --crop W:H:X:Y`: crop the source picture (in source pixels) before placing
-  it, so that speaker and slides show bigger. Without `--ids` it is remembered for the
-  whole event; with `--ids` only for those clips, whose own crop then wins (for when
-  the speaker stands somewhere else, as in a Q&A).
+- `burn --crop W:H:X:Y`: show only that part of the source picture (in source
+  pixels), so that speaker and slides show bigger. Optional: without it the whole
+  frame is shown. The crop is stored on the clip and reused by its later burns;
+  `--crop none` clears it.
 - `burn --no-tighten`: burn the plain cut even though a tightened one exists.
 - `burn --footer`, `--font`, `--size`, `--active`, `--keep-case`: style overrides.
   The defaults are the agreed look; change them only if the human asks.
@@ -68,30 +70,32 @@ In `clips/work/<event>/final/`, per clip:
 1. Cut:
 
    ```
-   clips/clips.py cut --event <event>
+   clips/clips.py cut --event <event> --ids <id>
    ```
 
-2. Choose the crop, once per event. Extract one frame
-   (`ffmpeg -ss 10 -i clips/work/<event>/final/clip_<id>.mp4 -frames:v 1 frame.jpg`),
-   look at it, and pick the rectangle that keeps the speaker and the slides and drops
-   dead space. With a fixed camera one rectangle serves the whole event. No crop is fine too: the whole frame is shown,
-   smaller. Check one frame of every clip all the same: when the speaker has moved
-   (standing for the Q&A, away from the desk), give that clip its own rectangle with
-   `burn --ids <id> --crop ...`.
+2. Decide whether to crop. Extract one frame
+   (`ffmpeg -ss 10 -i clips/work/<event>/final/clip_<id>.mp4 -frames:v 1
+   clips/work/<event>/final/clip_<id>.frame.jpg`) and look at it. The picture always fills the width of the canvas and its height
+   follows its shape, so cutting dead space off the sides makes the speaker and the
+   slides bigger. Crop when there is dead space to lose and nothing the clip needs
+   falls outside the rectangle; otherwise leave the whole frame. Decide for this
+   clip, from this clip's frame: the speaker or the camera may have moved since the
+   last one. Keep the rectangle at least as wide as it is tall: a narrower one makes
+   the picture so tall that the captions meet the footer.
 
 3. Align:
 
    ```
-   clips/clips.py align --event <event>
+   clips/clips.py align --event <event> --ids <id>
    ```
 
-4. Read every `clip_<id>.words.tsv` and fix what Whisper mis-heard: names
+4. Read `clip_<id>.words.tsv` and fix what Whisper mis-heard: names
    ("Mantua Dev" is "Mantova Dev"), jargon, acronyms ("cp" is "CPU"), command-line
-   flags. Edit the word, keep the times. Show the human the full text of each clip
+   flags. Edit the word, keep the times. Show the human the full text of the clip
    and ask for corrections; they know the talk.
 
-5. Tighten, for the clips that need it: every clip over 60 s, and any clip where the
-   human wants something out. Skip it for the others.
+5. Tighten, when the clip needs it: it is over 60 s, or the human wants something
+   out. Otherwise skip this step.
 
    ```
    clips/clips.py tighten --event <event> --ids <id> \
@@ -120,14 +124,14 @@ In `clips/work/<event>/final/`, per clip:
      clean, does the jump look acceptable. `tighten` prints a warning while the result
      is still over 60 s.
 
-6. Burn (pass `--crop` the first time):
+6. Burn, with `--crop` if you decided on one in step 2:
 
    ```
-   clips/clips.py burn --event <event> --crop <W:H:X:Y>
+   clips/clips.py burn --event <event> --ids <id> [--crop <W:H:X:Y>]
    ```
 
-7. Open each `clip_<id>.final.mp4` for the human (`open` on macOS, `xdg-open` on
-   Linux), one at a time, and ask about text, caption timing and look. Apply the
+7. Open `clip_<id>.final.mp4` for the human (`open` on macOS, `xdg-open` on Linux)
+   and ask about text, caption timing and look. Apply the
    feedback and burn again (a burn takes seconds):
    - wrong word: edit the words file;
    - one caption early or late: change that word's start time in the words file (for
@@ -138,19 +142,22 @@ In `clips/work/<event>/final/`, per clip:
 
    Repeat until the human approves.
 
-8. When the human approves a clip, propose the post text for it in the chat. Do not
+8. When the human approves the clip, propose the post text for it in the chat. Do not
    write it to a file: nothing about a run is kept in the repo, and the human copies
    what they like.
    - Italian, informal and welcoming, like the root `README.md`. No hype and no
      invented facts: use only what is said in the clip and what is in
      `events/<event>/README.md` (talk title, speaker, links).
-   - Per clip: a title of at most 60 characters (needed for YouTube Shorts, works as
+   - A title of at most 60 characters (needed for YouTube Shorts, works as
      the first line elsewhere); a caption of 2 or 3 short sentences (the hook, what
      the clip shows, an invitation to the next meetup with `https://mantova.dev`);
      5 to 8 hashtags mixing community ones (`#MantovaDev` `#Mantova`) and topic ones.
    - Name the speaker only if the event README names them.
    - One proposal, then adjust on feedback. The same text serves all three platforms
      unless the human asks for per-platform versions.
+
+9. Ask the human whether they want another clip from this talk. If so, go back to
+   `highlight-selection` and pick the next moment from the long list.
 
 Order matters: settle the cut first. If the human changes a clip's start or end now,
 go back to `choose --start/--end` in `highlight-selection`, then `cut --force`,
