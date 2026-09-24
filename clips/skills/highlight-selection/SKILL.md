@@ -3,24 +3,27 @@
 ## Trigger
 
 An event has a compact transcript (`clips/work/<event>/transcript.json`, from
-`transcript-extract`) and needs a short list of clip candidates for a human to
-choose from before anything gets cut.
+`transcript-extract`) and the human wants a clip from it: the first one, or one
+more.
 
 ## What it does
 
-A funnel, cheap steps first:
+A funnel, cheap steps first, then one clip at a time:
 
 1. An agent (you) reads the whole talk and gives the human a **long list** of every
-   moment that could work as a clip: text only, in the chat, about a dozen lines.
-2. The human **shortlists** 4 or 5 of them to look at, and adds any moment they
-   remember from the talk.
-3. Only for the shortlist, you define precise candidates by segment index and
-   exact quote (never by timestamp) in `clips/work/<event>/highlights.json`. Code
-   (`clips.py`) validates them, computes an actual cut point for each one (snapped
-   to detected silence where possible), flags problems (too short, too long, quote
-   mismatch, overlap), and renders a small preview file per candidate.
-4. The human reviews the previews with you and keeps 2 or 3; only then does
-   `choose` mark them.
+   moment that could work as a clip: in the chat only, a comparison table of about
+   a dozen rows plus a short note per moment.
+2. The human **picks the moment to work on**, from the list or from what they
+   remember of the talk.
+3. For that one moment, you define a precise candidate by segment index and exact
+   quote (never by timestamp) in `clips/work/<event>/highlights.json`. Code
+   (`clips.py`) validates it, computes an actual cut point (snapped to detected
+   silence where possible), flags problems (too short, too long, quote mismatch,
+   overlap), and renders a small preview file.
+4. The human reviews the preview with you: keep, adjust or drop. A kept candidate is
+   marked with `choose` and goes straight on to `produce-clip`.
+5. When that clip is finished the human decides whether to make another. The long
+   list stays valid: pick the next moment and repeat from 2.
 
 You never compute timestamps or do time arithmetic. Segment times are
 reliable; word times are rough (see `transcript-extract`'s SKILL.md timing
@@ -39,7 +42,7 @@ indices and silence detection, not from anything you calculate.
 - `clips/work/<event>/highlights.json`: see `clips/schemas/highlights.schema.json`.
   You write the `event`, `source_transcript` and `candidates[]` (each with `id`,
   `start_seg`, `end_seg`, `start_quote`, `end_quote`, `score`, `hook`, `reason`,
-  `needs_visuals`). `clips.py` adds `cut` and `chosen` to each candidate;
+  `needs_visuals`). `clips.py` adds `cut`, `chosen` and `crop` to a candidate;
   never write those fields yourself.
 - `clips/clips.py status --event <event>` prints the current state of every
   candidate at any time (range, duration, flags, adjustments, preview file and
@@ -70,13 +73,34 @@ indices and silence detection, not from anything you calculate.
    - Every moment that could work as a clip, in **talk order**, numbered, up to
      about 12 for a one hour talk. Fewer if the talk does not have that many: do
      not pad with weak moments. Cover the whole talk, not just the first half.
-   - Per moment, one compact entry: when it happens (`mm:ss`), a rough length,
-     one or two sentences on what is said, one short key quote to jog the
-     human's memory, and any caveat (needs the slides, garbled transcript,
-     depends on earlier context, the payoff comes much later).
-   - Put a star on the ones you would pick yourself (about 5). No scores here.
-   - Then ask the human which ones they want to look at (typically 4 or 5), and
-     whether they remember other moments from the talk. They were in the room:
+   - Look for two kinds of moment: a contiguous span that works as it is in
+     under 60 s, and a longer span (up to 120 s) whose hook and payoff are kept
+     apart by something that can be dropped later: a tangent, a stretch that
+     needs the screen, a repetition, dead time in a demo. A setup that sits too
+     far from its payoff for one span is a caveat, not a reason to skip the
+     moment: say how far apart they are.
+   - Start with one table, one row per moment, so the human can compare at a
+     glance:
+
+     | # | When | Moment | Raw | After drops | Drops | Score | Best uncut |
+     |---|------|--------|-----|-------------|-------|-------|------------|
+
+     `When` is the `mm:ss` where the span starts and `Moment` a title of a few
+     words. `Raw` is the length of the whole span, `After drops` the length
+     once the drops are out (the same as `Raw` when there are none) and
+     `Drops` how many there are. `Score` (0-100) is your confidence that the
+     finished clip works on its own. `Best uncut` is the score of the best
+     contiguous span of 60 s or less inside the same moment: it shows what
+     the drops buy, and it equals `Score` when there are none. Lengths are
+     rough, read off the stamps to the nearest 5 s: no exact arithmetic. Put
+     a star next to the number of the ones you would pick yourself (about 5).
+   - Below the table, one compact entry per moment: one or two sentences on
+     what is said, one short key quote to jog the human's memory, what you
+     would drop and roughly how long each drop is, and any caveat (needs the
+     slides, garbled transcript, depends on earlier context, the payoff comes
+     much later).
+   - Then ask the human which moment to work on first, and whether they remember
+     other moments from the talk. They were in the room:
      delivery, laughter and what landed with the audience are invisible in a
      transcript, so their picks outrank yours.
    - The human may describe a moment loosely ("the thermal throttling bit",
@@ -84,13 +108,14 @@ indices and silence detection, not from anything you calculate.
      transcript, quote the passage back, and ask them to confirm it (or to say
      which one they meant if it could be two passages) before going on.
 
-   Wait for the human's shortlist. The number is theirs to set: if they ask for
-   more or fewer, follow that.
+   Wait for the human's pick. If they name several moments, work through them one
+   at a time, in their order: each one goes all the way to a finished clip before
+   the next one starts.
 
-4. Define a precise candidate for each shortlisted moment (the human's own
-   moments included), numbered 1..N in the order the human gave or, failing that,
-   your own ranking. This is where the care goes. Criteria, in rough priority
-   order:
+4. Define a precise candidate for the moment the human picked. Its `id` is the
+   next free number: ids follow the order of definition and never change, because
+   every file of a clip is named after its id. This is where the care goes.
+   Criteria, in rough priority order:
    - Self-contained: makes sense with zero prior context from earlier in the
      talk. If it needs a setup, include the setup segment(s) or drop it.
    - Has a hook: a strong, surprising or counterintuitive claim, a concrete
@@ -115,18 +140,29 @@ indices and silence detection, not from anything you calculate.
      clearly mis-transcribed nonsense, prefer boundaries that avoid it, and
      mention the transcription doubt in `reason` so the human checks the
      preview.
-   - Length: hard limits are `too_short` under 15 s and `too_long` over 60 s.
+   - Length: the finished clip must be 15 to 60 s, and 25 to 50 s is the aim.
      Snapping can add up to about 1.5 s at the end and 0.35 s at the start, so
-     aim for 25 to 50 s by the `<mm:ss>` stamps and leave at least 5 s of
-     margin under 60 (do not do exact arithmetic; a rough glance at the
-     stamps is enough). Do not max out the length: shorter and punchier beats
-     a clip that drags to 59 s.
+     leave at least 5 s of margin under 60 (do not do exact arithmetic; a rough
+     glance at the `<mm:ss>` stamps is enough). Do not max out the length:
+     shorter and punchier beats a clip that drags to 59 s.
+   - Longer spans with drops: when the hook and the payoff sit either side of a
+     tangent, a stretch that needs the screen, or a repetition, the span may
+     run up to 120 s (`too_long` flags more), because `tighten` in
+     `produce-clip` later drops whole stretches from inside the clip. Use this
+     only when no contiguous span has both the hook and the payoff, and name
+     in `reason` the segments you would drop, so that what is left lands
+     under 60 s. Count on one to three large drops of whole sentences: a drop
+     can only start and end on a real pause, so it may have to be wider than
+     you planned, and every drop is a visible jump. `status` marks such a
+     candidate "over 60s: needs tighten --drop". What to lose is the human's
+     call: the long list names the drops, the review in step 8 shows them
+     struck out in the text.
    - Candidates must not overlap in segment range with each other.
-   - If a shortlisted moment turns out not to work once you look closely (no
+   - If the moment turns out not to work once you look closely (no
      clean opening, no ending under 60 s), say so and propose the closest span
      that does, instead of silently dropping or reshaping it.
 
-   For each candidate, write:
+   For the candidate, write:
    - `start_seg` / `end_seg`: the segment indices (inclusive) that bound the
      clip.
    - `start_quote` / `end_quote`: copy the **exact text** of the first and
@@ -144,8 +180,8 @@ indices and silence detection, not from anything you calculate.
 
    ```json
    {
-     "event": "2026-09-17",
-     "source_transcript": "clips/work/2026-09-17/transcript.json",
+     "event": "<YYYY-MM-DD>",
+     "source_transcript": "clips/work/<YYYY-MM-DD>/transcript.json",
      "candidates": [
        {
          "id": 1,
@@ -162,14 +198,18 @@ indices and silence detection, not from anything you calculate.
    }
    ```
 
+   For a later candidate, append it to `candidates` and leave the existing
+   entries as they are, tool-written fields included.
+
 5. Run:
 
    ```
    clips/clips.py snap --event <event>
    ```
 
-   This validates your candidates, computes `cut` for each and prints the
-   status of every candidate. Read it.
+   This validates the candidates, computes `cut` for the new one (earlier
+   candidates keep their cut and their adjustments) and prints the status of
+   every candidate. Read it.
 
 6. Fix problems and re-run `snap`:
    - `quote_mismatch`: your `start_quote` or `end_quote` did not match the
@@ -177,33 +217,37 @@ indices and silence detection, not from anything you calculate.
      text from the `render` output.
    - `too_short`: extend `end_seg` (or pull `start_seg` earlier) to include
      more of the thought, then re-run. Do not shrink the requirement instead.
-   - `too_long`: narrow `start_seg`/`end_seg` to the tightest self-contained
-     span, then re-run.
+   - `too_long` (over 120 s): narrow `start_seg`/`end_seg` to the tightest
+     self-contained span, then re-run. A span between 60 and 120 s is not
+     flagged, but it is only acceptable with drops planned (see Length above).
    - `overlaps_candidate_<id>`: adjust the segment ranges so candidates do not
      share segments.
-   Re-run `snap` after every edit until no candidate has a blocking flag you
+   Re-run `snap` after every edit until the candidate has no blocking flag you
    can fix by adjusting segment ranges. `snap` is idempotent and safe to
    re-run as many times as needed; it always recomputes from your current
    `highlights.json`.
 
-7. Render the review files:
+7. Render the review file:
 
    ```
-   clips/clips.py preview --event <event>
+   clips/clips.py preview --event <event> --ids <id>
    ```
 
-8. Review the candidates **with the human, one at a time**. You drive the
-   session; never decide for the human which clips to keep.
-   - First present a short summary list: id, score, duration, the hook, and
-     one line of your own honest opinion per candidate (weak opening, ending
-     cut before the punchline, garbled transcript, and so on).
-   - Then, for each candidate in rank order: open its preview for the human
+8. Review the candidate **with the human**. You drive the session; never
+   decide for the human whether a clip is kept.
+   - Open its preview for the human
      (`open clips/work/<event>/previews/candidate_<id>.mp4` on macOS,
-     `xdg-open` on Linux). In the same message, paste that candidate's
-     transcript from the `status` output (the sentences inside the cut plus the
-     one before and after) and say where the clip starts and ends in the
-     player, so the human can read along while watching. Then wait for the
-     verdict: keep, drop, or adjust.
+     `xdg-open` on Linux). In the same message, give the duration, the hook
+     and your own honest opinion in a line or two (weak opening, ending cut
+     before the punchline, garbled transcript, and so on), paste the
+     candidate's transcript from the `status` output (the sentences inside
+     the cut plus the one before and after) and say where the clip starts and
+     ends in the player, so the human can read along while watching. For a
+     candidate with
+     planned drops, strike those stretches out in the pasted transcript and
+     give the rough length that remains: the preview plays the whole span,
+     the drops only happen in `produce-clip`. Then wait for the verdict:
+     keep, drop, or adjust.
    - The human answers with times read off the player ("end at 0:29") or with
      words from the transcript ("stop after 'mila euro'", "start at 'mi sono
      dimenticato'"). Apply either, which also re-renders that preview, then
@@ -222,23 +266,27 @@ indices and silence detection, not from anything you calculate.
      is one. Word times are rough, so an edge set by words is approximate:
      the human confirms it on the re-rendered preview and can still nudge it
      with a player time. `--reset ID` returns a candidate to its snapped cut.
-     Adjustments are kept per candidate and per edge until replaced, so you
-     can work through the clips one by one.
+     Adjustments are kept per candidate and per edge until replaced.
    - If the human wants a different span rather than a nudge (another
      sentence to start from, a punchline a few segments later), edit
      `start_seg` / `end_seg` and the quotes in `highlights.json`, re-run
      `snap` and `preview --ids <id>`, and review that candidate again. `snap`
      keeps the adjustments of every candidate whose span did not change; the
      candidate you re-spanned starts again from its snapped cut.
-   - Move to the next candidate only when the human is done with the current
-     one.
 
-9. When every candidate has a verdict, record the final selection:
+9. When the human keeps the candidate, mark it:
 
    ```
-   clips/clips.py choose --event <event> --ids 1,3
+   clips/clips.py choose --event <event> --ids <id>
    ```
 
-   `--ids` is the complete list of kept candidates (all others become
-   unchosen); adjustments made in step 8 are preserved. This is the last step
-   of this skill. Next step: `produce-clip`.
+   Other candidates keep their state, and the adjustments made in step 8 are
+   preserved. `--unchoose <id>` takes a candidate back out. If the human drops
+   the candidate instead, leave it unchosen and offer the next moment from the
+   long list.
+
+   Next step: `produce-clip`, for this clip. When it is finished, ask the human
+   whether they want another clip. If so, continue from step 4 with the next
+   moment: within the same session the long list from step 3 stays valid, so the
+   talk is not read again. A new session starts from step 1, and `status` shows
+   which candidates already exist.

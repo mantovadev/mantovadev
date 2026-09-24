@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mantovadev.local/clips/schemas/highlights.schema.json",
   "title": "Highlight candidates for an event",
-  "description": "clips/work/<event>/highlights.json. Candidate fields (id, start_seg, end_seg, start_quote, end_quote, score, hook, reason, needs_visuals) are written by the highlight-selection skill's agent step. The cut and chosen fields are written by clips.py's snap/preview/choose subcommands, not by the agent. Run `clips.py status` for a human-readable view.",
+  "description": "clips/work/<event>/highlights.json. Candidate fields (id, start_seg, end_seg, start_quote, end_quote, score, hook, reason, needs_visuals) are written by the highlight-selection skill's agent step. The cut, chosen and crop fields are written by clips.py (snap, preview, choose, burn), not by the agent. Run `clips.py status` for a human-readable view.",
   "type": "object",
   "required": ["event", "source_transcript", "candidates"],
   "additionalProperties": false,
@@ -14,23 +14,11 @@
     },
     "source_transcript": {
       "type": "string",
-      "description": "Path to the transcript this file was built from, relative to the repo root, e.g. clips/work/2026-09-17/transcript.json."
+      "description": "Path to the transcript this file was built from, relative to the repo root, e.g. clips/work/<event>/transcript.json."
     },
     "candidates": {
       "type": "array",
       "items": { "$ref": "#/$defs/candidate" }
-    },
-    "burn": {
-      "type": "object",
-      "description": "Options remembered across clips.py burn runs for this event.",
-      "additionalProperties": false,
-      "properties": {
-        "crop": {
-          "type": "string",
-          "pattern": "^[0-9]+:[0-9]+:[0-9]+:[0-9]+$",
-          "description": "W:H:X:Y in source pixels, set by the last `clips.py burn --crop ...` call and reused when --crop is omitted."
-        }
-      }
     }
   },
   "$defs": {
@@ -45,7 +33,7 @@
         "id": {
           "type": "integer",
           "minimum": 1,
-          "description": "1..N, ranked best first (1 = best candidate)."
+          "description": "1..N, in the order the candidates were defined. Never renumber: files in final/ are named after it."
         },
         "start_seg": {
           "type": "integer",
@@ -83,6 +71,11 @@
           "description": "True if the clip depends on the slides being readable to make sense."
         },
         "cut": { "$ref": "#/$defs/cut" },
+        "crop": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-9]+:[0-9]+:[0-9]+$",
+          "description": "Set by `clips.py burn --crop`. W:H:X:Y in source pixels: the part of the picture this clip shows. Absent means the whole frame."
+        },
         "chosen": {
           "type": "boolean",
           "default": false,
