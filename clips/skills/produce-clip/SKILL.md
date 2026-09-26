@@ -2,178 +2,102 @@
 
 ## Trigger
 
-The human has kept a candidate in `highlight-selection` (`chosen: true` in
-`clips/work/<event>/highlights.json`) and its cut points are settled. This skill
-takes that one clip to the finish, before any other clip is started.
+The human has kept a candidate in `highlight-selection` (`chosen: true`) and its cut
+is settled. This skill takes that one clip to the finish before another is started.
+It also joins finished clips into a montage.
 
 ## What it does
 
-Turns the chosen candidate into a finished vertical clip, ready for Shorts, Reels
-and TikTok:
-
-1. `cut`: frame-accurate cut of the source at full quality.
-2. `align`: transcribes that clip on its own for precise word timing and writes an
-   editable words file.
-3. `tighten` (optional): drops stretches of speech the human agreed to lose
-   (a tangent, a stretch that needs the screen, a false start) and shortens long
+1. `cut`: frame-accurate cut of the source, then a fresh transcription of the clip
+   for precise word timing, written to an editable words file with the glossary
+   (`clips/config/glossary.tsv`) applied.
+2. `tighten` (optional): drops stretches the human agreed to lose and shortens long
    pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
-4. `burn`: renders a 1080x1920 canvas in the Mantova Dev look: dark brand background,
-   logo on top, the picture at full width, word-by-word captions below it (upper
-   case, up to 3 words at a time, the spoken word highlighted in brand turquoise) and
-   `https://mantova.dev` at the bottom.
+3. `burn`: the 1080x1920 clip in the Mantova Dev look (brand background, logo, the
+   picture at full width, word-by-word captions, `https://mantova.dev` at the bottom),
+   brought to a common loudness (-14 LUFS).
+4. `join` (montages only): finished clips from any events plus an end card.
 
-The human reviews the words and the result. The step ends with a proposed post text
-for the approved clip, given in the chat. You never publish anything.
-
-## Inputs
-
-- `--event <YYYY-MM-DD>`. Required by every subcommand.
-- `--ids <id>`: the clip you are working on. Pass it on every command: without it a
-  command acts on every chosen candidate.
-- `tighten --drop 'ID=first words ... last words'`: remove that stretch of speech
-  (one phrase without ` ... ` drops just that phrase). Repeatable. `--replan`: start
-  the plan over. How pauses are shortened is set by the `TIGHT_*` values at the top of
-  `clips/clips.py`.
-- `burn --crop W:H:X:Y`: show only that part of the source picture (in source
-  pixels), so that speaker and slides show bigger. Optional: without it the whole
-  frame is shown. The crop is stored on the clip and reused by its later burns;
-  `--crop none` clears it.
-- `burn --no-tighten`: burn the plain cut even though a tightened one exists.
-- `burn --footer`, `--font`, `--size`, `--active`, `--keep-case`: style overrides.
-  The defaults are the agreed look; change them only if the human asks.
-- The brand font is Aeonik Pro (Black for captions, Bold for the footer). It is
-  proprietary and not in the repo: it must be installed on the machine. If it is
-  missing, captions silently render in a fallback font, so check the first result
-  and tell the human.
-- The logo is `clips/config/brand/logo-dark-bg.png`, a PNG export of
-  `assets/svg/logo-orizzontale-chiaro.svg`.
-
-## Outputs
-
-In `clips/work/<event>/final/`, per clip:
-
-- `clip_<id>.mp4`: the plain cut.
-- `clip_<id>.words.tsv`: one word per line, `start<TAB>end<TAB>word`, seconds from
-  the start of the clip. Meant to be edited.
-- `clip_<id>.tighten.json`: the tighten plan, one entry per cut with a reason (`drop`
-  or `pause`). Set `"apply": false` on a cut to keep that stretch after all, then run
-  `tighten` again.
-- `clip_<id>.tight.mp4`: the tightened clip, without captions. `burn` uses it
-  automatically when it exists and moves the caption times itself: the words file
-  stays the only file you edit, always in the plain cut's times.
-- `clip_<id>.ass`, `clip_<id>.align.json`, `clip_<id>.tighten.graph`: generated, do
-  not edit.
-- `clip_<id>.final.mp4`: **the file to publish.**
+Pass `--ids <id>` on every command: without it a command acts on every chosen
+candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
+`clip_<id>.words.tsv` (`start<TAB>end<TAB>word`, clip seconds: the file you edit),
+`clip_<id>.tight.mp4` (tightened, no captions) and `clip_<id>.final.mp4` (the result).
 
 ## How
 
-1. Cut:
+1. Cut and align:
 
    ```
    clips/clips.py cut --event <event> --ids <id>
    ```
 
-2. Decide whether to crop. Extract one frame
+   `--force` cuts again after the edges changed; it also rewrites the words file, so
+   hand edits are lost and `tighten` must run again.
+
+2. Decide the crop. Look at a frame
    (`ffmpeg -ss 10 -i clips/work/<event>/final/clip_<id>.mp4 -frames:v 1
-   clips/work/<event>/final/clip_<id>.frame.jpg`) and look at it. The picture always fills the width of the canvas and its height
-   follows its shape, so cutting dead space off the sides makes the speaker and the
-   slides bigger. Crop when there is dead space to lose and nothing the clip needs
-   falls outside the rectangle; otherwise leave the whole frame. Decide for this
-   clip, from this clip's frame: the speaker or the camera may have moved since the
-   last one. Keep the rectangle at least as wide as it is tall: a narrower one makes
-   the picture so tall that the captions meet the footer.
+   clips/work/<event>/final/clip_<id>.jpg`). The picture always fills the canvas
+   width, so cutting dead space off the sides makes speaker and slides bigger. Crop
+   when nothing the clip needs falls outside; keep the rectangle at least as wide as it
+   is tall. Other clips of the event show earlier crops (`crop` in `highlights.json`):
+   reuse one if the camera did not move.
 
-3. Align:
+3. Read the words file and fix what whisper mis-heard: jargon, acronyms ("cp" is
+   "CPU"), flags. Edit the word, keep the times. A name it keeps getting wrong goes in
+   `clips/config/glossary.tsv` instead. Show the human the clip's text and ask for
+   corrections.
 
-   ```
-   clips/clips.py align --event <event> --ids <id>
-   ```
-
-4. Read `clip_<id>.words.tsv` and fix what Whisper mis-heard: names
-   ("Mantua Dev" is "Mantova Dev"), jargon, acronyms ("cp" is "CPU"), command-line
-   flags. Edit the word, keep the times. Show the human the full text of the clip
-   and ask for corrections; they know the talk.
-
-5. Tighten, when the clip needs it: it is over 60 s, or the human wants something
-   out. Otherwise skip this step.
+4. Tighten, when the clip is over 60 s or the human wants something out:
 
    ```
-   clips/clips.py tighten --event <event> --ids <id> \
-     --drop '<id>=<first words> ... <last words>'
+   clips/clips.py tighten --event <event> --ids <id> --drop '<id>=<first words> ... <last words>'
    ```
 
-   - What to drop is an editorial choice the human makes. Propose it in the chat as
-     the clip's text with the stretches struck out, and say what each one is (tangent,
-     needs the screen, repetition, false start). Prefer one to three large drops: every
-     drop is a visible jump, because the camera is fixed and wide. Do not drop single
-     filler words. Never reorder or reword what the speaker says, and re-read the text
-     that remains: it must still say what they meant.
-   - Quote the words as written in the words file (after your fixes in step 4).
-   - Both edges of a drop must land on a real pause, otherwise the cut splits words
-     and `tighten` refuses it. Then widen the drop to the nearest pauses, which can
-     cost a sentence you wanted to keep, or leave the stretch in. The report prints the
-     remaining text: read it again after widening.
-   - Pauses of 0.7 s or more are shortened to about half a second. Shorter ones are
-     speech rhythm and stay: a speaker without them sounds rushed. On a fluent speaker
-     this gains little: the drops are what shortens a clip.
-   - The clip's start and end are not `tighten`'s job. If the cut opens on the tail
-     of the previous sentence or ends mid-thought, fix it with `choose` (see "Order
-     matters" below). A clip that ends on the speaker's own closing line and a real
-     pause beats a shorter one that stops abruptly.
-   - Open `clip_<id>.tight.mp4` for the human and ask about each splice: does it sound
-     clean, does the jump look acceptable. `tighten` prints a warning while the result
-     is still over 60 s.
+   - What to drop is the human's call. Propose it as the clip's text with the
+     stretches struck out, one to three large drops; never single filler words, never
+     reorder or reword. Quote the words as in the words file.
+   - Both edges of a drop must land on a real pause, or `tighten` refuses it: widen it
+     to the nearest pauses, or leave the stretch in.
+   - Pauses of 0.7 s or more are shortened to about half a second. On a fluent
+     speaker this gains little: estimate the gain from the pauses in the report, not
+     from gaps in the words file. Drops are what shortens a clip.
+   - Every run plans from scratch: give all the drops each time. The clip's start and
+     end are not `tighten`'s job: move them with `choose`, then `cut --force`.
+   - Open `clip_<id>.tight.mp4` and ask about each splice.
 
-6. Burn, with `--crop` if you decided on one in step 2:
+5. Burn, with `--crop W:H:X:Y` if you decided one (it is stored; `none` clears it):
 
    ```
    clips/clips.py burn --event <event> --ids <id> [--crop <W:H:X:Y>]
    ```
 
-7. Open `clip_<id>.final.mp4` for the human (`open` on macOS, `xdg-open` on Linux)
-   and ask about text, caption timing and look. Apply the
-   feedback and burn again (a burn takes seconds):
-   - wrong word: edit the words file;
-   - one caption early or late: change that word's start time in the words file (for
-     a tightened clip the player shows tightened times: find the word by its text and
-     move its start by the amount the human gives);
-   - all captions consistently early or late: adjust `DTW_LEAD` at the top of
-     `clips/clips.py` and re-run `align --force`.
+6. Open `clip_<id>.final.mp4` and ask about text, caption timing and look. A wrong word
+   or one late caption: edit the words file (for a tightened clip, find the word by its
+   text; the player shows tightened times) and burn again. Repeat until approved.
 
-   Repeat until the human approves.
+7. Propose the post text in the chat: Italian, informal, no hype, only what the clip
+   says and what `events/<event>/README.md` holds. A title of at most 60 characters,
+   a caption of 2 or 3 short sentences ending with an invitation to the next meetup and
+   `https://mantova.dev`, 5 to 8 hashtags (`#MantovaDev` `#Mantova` plus topic ones).
+   Name the speaker only if the event README does. Nothing dated. When approved, and
+   if the human asks, save video and text outside the repo as
+   `YYYYMMDD-mantovadev-<slug>.mp4` and `.txt` (e.g. in `~/Movies/MD`).
 
-8. When the human approves the clip, propose the post text for it in the chat. Do not
-   write it to a file: nothing about a run is kept in the repo, and the human copies
-   what they like.
-   - Italian, informal and welcoming, like the root `README.md`. No hype and no
-     invented facts: use only what is said in the clip and what is in
-     `events/<event>/README.md` (talk title, speaker, links).
-   - A title of at most 60 characters (needed for YouTube Shorts, works as
-     the first line elsewhere); a caption of 2 or 3 short sentences (the hook, what
-     the clip shows, an invitation to the next meetup with `https://mantova.dev`);
-     5 to 8 hashtags mixing community ones (`#MantovaDev` `#Mantova`) and topic ones.
-   - Name the speaker only if the event README names them.
-   - One proposal, then adjust on feedback. The same text serves all three platforms
-     unless the human asks for per-platform versions.
+8. Ask whether they want another clip; if so, back to `highlight-selection`.
 
-9. Ask the human whether they want another clip from this talk. If so, go back to
-   `highlight-selection` and pick the next moment from the long list.
+## Montage
 
-Order matters: settle the cut first. If the human changes a clip's start or end now,
-go back to `choose --start/--end` in `highlight-selection`, then `cut --force`,
-`align --force`, `tighten --replan` (with the drops again) and `burn` for that clip.
-`align --force` overwrites the words file, so hand edits made before it are lost and
-must be redone. Whisper also words things a little differently on each run: copy the
-`--drop` quotes from the new words file. Adding or removing a line in the words file
-after `tighten` needs `tighten --replan` too; changing a word or a time does not.
+For a montage (e.g. "chi siamo"), finish each piece as above, then write
+`clips/work/<slug>/montage.json` and run `clips/clips.py join --montage <slug>`:
 
-Why drops need pauses: a cut inside running speech clips consonants however good the
-word times are, and with a fixed wide camera the jump shows too. Pauses are measured
-on the clip's audio, first at the noise floor `snap` uses, then at two louder floors,
-because a noisy stretch (Q&A, audience) never gets that quiet. A drop is a plain cut:
-no zoom and no transition.
+```json
+{
+  "pieces": ["2026-06-18:1", "2026-09-17:3", "2026-04-09:7"],
+  "card": {"lines": ["CI VEDIAMO", "AL PROSSIMO", "INCONTRO!"], "subtitle": "Gratuito e aperto a tutti"}
+}
+```
 
-Why per-clip alignment: word times in the full-talk transcript are only good to about
-half a second. Re-transcribing the short clip without VAD and with DTW token
-timestamps (`-dtw`, which needs flash attention off) puts word starts on the audible
-onsets. The default timestamps often place a word inside the pause before it.
+Pieces play in order, as plain cuts, at the same loudness. The optional end card shows
+the logo, the lines (the last in turquoise), the subtitle and the link (default
+`https://mantova.dev`) for 3 s. The result is `clips/work/<slug>/<slug>.mp4`. Pieces
+can be short (8 to 25 s each); keep the whole under 90 s and the middle brisk.

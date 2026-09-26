@@ -2,9 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mantovadev.local/clips/schemas/highlights.schema.json",
   "title": "Highlight candidates for an event",
-  "description": "clips/work/<event>/highlights.json. Candidate fields (id, start_seg, end_seg, start_quote, end_quote, score, hook, reason, needs_visuals) are written by the highlight-selection skill's agent step. The cut, chosen and crop fields are written by clips.py (snap, preview, choose, burn), not by the agent. Run `clips.py status` for a human-readable view.",
+  "description": "clips/work/<event>/highlights.json. The agent writes event, source_transcript and each candidate's id, segments, quotes and optional note. clips.py (preview, choose, burn) writes cut, chosen and crop. Run `clips.py status` for a human-readable view.",
   "type": "object",
-  "required": ["event", "source_transcript", "candidates"],
+  "required": [
+    "event",
+    "source_transcript",
+    "candidates"
+  ],
   "additionalProperties": false,
   "properties": {
     "event": {
@@ -18,17 +22,22 @@
     },
     "candidates": {
       "type": "array",
-      "items": { "$ref": "#/$defs/candidate" }
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
     }
   },
   "$defs": {
     "candidate": {
       "type": "object",
-      "required": [
-        "id", "start_seg", "end_seg", "start_quote", "end_quote",
-        "score", "hook", "reason", "needs_visuals"
-      ],
       "additionalProperties": false,
+      "required": [
+        "id",
+        "start_seg",
+        "end_seg",
+        "start_quote",
+        "end_quote"
+      ],
       "properties": {
         "id": {
           "type": "integer",
@@ -47,30 +56,19 @@
         },
         "start_quote": {
           "type": "string",
-          "description": "Exact text of the first segment (start_seg), used as a checksum against the transcript."
+          "description": "Exact text of the first segment (start_seg): a checksum against the transcript, and the words the start edge is placed on."
         },
         "end_quote": {
           "type": "string",
-          "description": "Exact text of the last segment (end_seg), used as a checksum against the transcript."
+          "description": "Exact text of the last segment (end_seg): a checksum against the transcript, and the words the end edge is placed on."
         },
-        "score": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
-        },
-        "hook": {
+        "note": {
           "type": "string",
-          "description": "One line, in Italian, that would open the clip on socials."
+          "description": "Optional, English: what the moment is and anything to check (planned drops, garbled transcript, needs the slides)."
         },
-        "reason": {
-          "type": "string",
-          "description": "English: why this candidate works as a clip."
+        "cut": {
+          "$ref": "#/$defs/cut"
         },
-        "needs_visuals": {
-          "type": "boolean",
-          "description": "True if the clip depends on the slides being readable to make sense."
-        },
-        "cut": { "$ref": "#/$defs/cut" },
         "crop": {
           "type": "string",
           "pattern": "^[0-9]+:[0-9]+:[0-9]+:[0-9]+$",
@@ -85,53 +83,77 @@
     },
     "cut": {
       "type": "object",
-      "description": "Written by clips.py's snap/preview/choose subcommands, not by the agent.",
-      "required": ["start", "end", "duration", "start_snapped", "end_snapped", "flags"],
+      "description": "Written by clips.py's preview and choose subcommands, not by the agent.",
       "additionalProperties": false,
+      "required": [
+        "segs",
+        "start",
+        "end",
+        "duration",
+        "edges"
+      ],
       "properties": {
         "segs": {
           "type": "array",
-          "items": { "type": "integer", "minimum": 0 },
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
           "minItems": 2,
           "maxItems": 2,
-          "description": "[start_seg, end_seg] this cut was computed from. snap keeps manual_shift only while this span is unchanged."
+          "description": "[start_seg, end_seg] this cut was computed from. preview computes the cut again when the span changes."
         },
-        "start": { "type": "number", "minimum": 0 },
-        "end": { "type": "number", "minimum": 0 },
-        "duration": { "type": "number", "minimum": 0 },
-        "start_snapped": {
-          "type": "boolean",
-          "description": "True if start was snapped to a detected silence edge."
+        "start": {
+          "type": "number",
+          "minimum": 0
         },
-        "end_snapped": {
-          "type": "boolean",
-          "description": "True if end was snapped to a detected silence edge."
+        "end": {
+          "type": "number",
+          "minimum": 0
         },
-        "flags": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^(too_short|too_long|quote_mismatch|overlaps_candidate_[0-9]+)$"
-          }
+        "duration": {
+          "type": "number",
+          "minimum": 0
         },
-        "manual_shift": {
+        "edges": {
           "type": "object",
-          "description": "Human adjustment of each edge in seconds, relative to the snapped cut (set through choose --start/--end, cleared through choose --reset).",
+          "description": "How each edge was placed: pause (on a pause next to the quoted words), tight (against the next word, no pause there), rough (the words were not found in the new alignment), hand (a time read off the preview player).",
           "additionalProperties": false,
           "properties": {
-            "start": { "type": "number" },
-            "end": { "type": "number" }
+            "start": {
+              "enum": [
+                "pause",
+                "tight",
+                "rough",
+                "hand"
+              ]
+            },
+            "end": {
+              "enum": [
+                "pause",
+                "tight",
+                "rough",
+                "hand"
+              ]
+            }
           }
         },
         "preview": {
           "type": "object",
           "description": "Written by the preview subcommand. origin is the source time of the preview file's first frame.",
           "additionalProperties": false,
-          "required": ["file", "origin", "pad"],
+          "required": [
+            "file",
+            "origin"
+          ],
           "properties": {
-            "file": { "type": "string" },
-            "origin": { "type": "number", "minimum": 0 },
-            "pad": { "type": "number", "minimum": 0 }
+            "file": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "number",
+              "minimum": 0
+            }
           }
         }
       }
