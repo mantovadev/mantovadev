@@ -1,0 +1,7 @@
+# Words whisper keeps getting wrong, fixed in every words file that cut writes.
+# wrong words<TAB>right words. Matching ignores case and punctuation; longest entry wins.
+MantovaDev	Mantova Dev
+Mantua Deve	Mantova Dev
+Mantua Dev	Mantova Dev
+Mattova Dev	Mantova Dev
+Mantua	Mantova

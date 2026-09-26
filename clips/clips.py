@@ -7,17 +7,16 @@ in clips/skills/ for how and when to run each step. Everything a run produces go
 in clips/work/<event>/ (gitignored).
 
 Subcommands:
-  ingest      normalize a source recording into source.mp4 + audio.wav
-  transcribe  run whisper.cpp and derive a compact transcript.json
-  render      print transcript.json as numbered, mm:ss-stamped lines
-  snap        compute cut points for highlight candidates
-  preview     render a small captioned review file per candidate
-  choose      mark candidates chosen and adjust their cut points
-  status      print one block per candidate: id, score, chosen, range, ...
-  cut         cut every chosen candidate from source.mp4
-  align       transcribe a cut clip on its own for word-level timing
-  tighten     shorten the pauses inside a cut clip
-  burn       build the .ass and render the final vertical clip
+  ingest      link or remux the recording to source.mp4, extract audio.wav
+  transcribe  run whisper.cpp and derive transcript.json
+  render      print the transcript as numbered, mm:ss-stamped lines
+  preview     place the cut of new candidates and render a review file
+  choose      mark candidates chosen and move their cut edges
+  status      print each candidate: range, edges, preview, text
+  cut         cut a chosen clip and align its words for the captions
+  tighten     shorten long pauses and drop stretches inside a cut clip
+  burn        render the final vertical clip with captions
+  join        join finished clips (any events) and an end card into a montage
 
 Run `clips.py <subcommand> --help` for each subcommand's options.
 """
@@ -25,6 +24,7 @@ Run `clips.py <subcommand> --help` for each subcommand's options.
 import argparse
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -39,14 +39,15 @@ from typing import NoReturn, Optional
 # word's end is clamped to the earliest of: its own raw end, the next word's
 # start, and its own start + 1.5s.
 WORD_END_CLAMP_MS = 1500.0
+LANGUAGE = "it"         # whisper language of the talks
+# transcribe / render / status: a sentence repeated this many times in a row is flagged as
+# likely invented (whisper loops over noise, applause or a pause).
+SUSPECT_REPEAT = 3
 
-# snap: candidate duration thresholds and silence-snap windows.
-TOO_SHORT_S = 15.0
+# preview: candidate duration limits (status warns outside them), and edge placement.
+TOO_SHORT_S = 15.0      # shorter works only as a piece of a montage
 TOO_LONG_S = 60.0       # the finished clip
 RAW_TOO_LONG_S = 120.0  # the cut itself may run longer, if tighten then drops stretches from it
-START_WINDOW = 1.0     # look for silence end within S-1.0 .. S+1.0
-END_WINDOW_PAD = 0.15  # look for silence start within Lw+0.15 .. E+1.0
-END_WINDOW_TAIL = 1.0
 MAX_LEAD = 0.35
 MAX_TAIL = 0.45
 # What counts as a pause (ffmpeg silencedetect). The right noise floor depends on the
@@ -56,8 +57,15 @@ SILENCE_MIN_S = 0.4
 PREVIEW_PAD = 5.0
 PHRASE_SEARCH_S = 30.0  # --start-at / --end-after look this far around the current cut
 PREVIEW_CAPTION_WORDS = 10
+# preview / choose: each cut edge is checked against a fresh alignment of the audio around
+# it (the same whisper DTW run cut uses): word times in the full transcript are off by
+# up to a second, more where whisper split the talk into even one-second segments.
+EDGE_PAD = 5.0      # seconds of audio aligned on each side of an edge's rough time
+EDGE_NEAR = 3.0     # the edge's words must be found this close to the rough time
+EDGE_MATCH = 3      # words matched at that end of the quote (fewer if they are not found)
+EDGE_GUARD = 0.05   # with no pause at an edge, the cut sits this far from the next word
 
-# align: timing. DTW token times tend to land a little after the
+# cut: word timing for the captions. DTW token times tend to land a little after the
 # audible word onset, so they are pulled earlier by DTW_LEAD. The first word
 # of each whisper segment uses the segment start instead, which sits right on
 # the speech onset after a pause.
@@ -73,7 +81,7 @@ BREAK_AFTER = ".?!,;:"  # punctuation that ends a chunk
 STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
 
 # tighten: pauses inside a cut clip are shortened, never removed whole. A pause is a
-# quiet run found by silencedetect on the clip itself, at the same noise floor as snap.
+# quiet run found by silencedetect on the clip itself, at the same noise floor as preview.
 TIGHT_DETECT_S = 0.15       # shortest quiet run silencedetect reports for tighten
 TIGHT_MERGE_S = 0.03        # quiet runs split by a click shorter than this count as one
 # Only long pauses are touched, and they keep about half a second: short pauses are
@@ -94,9 +102,26 @@ DROP_AHEAD = 0.3
 DROP_NOISE_LADDER = ("-30dB", "-25dB")
 DROP_SEP = " ... "          # --drop "ID=first words ... last words"
 
+# burn: loudness, in LUFS (the loudness unit the platforms normalize to; -14 is what
+# YouTube plays at). Every clip is brought to it, so clips and montage pieces match.
+LOUDNESS_TARGET = -14
+LOUDNESS_PEAK = -1.5     # true peak ceiling, dBTP
+
 CANVAS_W, CANVAS_H = 1080, 1920   # output is always vertical
 LOGO_W = 640             # logo width and top offset on the canvas
 LOGO_Y = 150
+FOOTER = "https://mantova.dev"   # static text at the bottom of every clip
+
+# join: montage frame rate, audio fades at each join, and the end card layout.
+MONTAGE_FPS = 30
+JOIN_FADE_IN = 0.08
+JOIN_FADE_OUT = 0.12
+CARD_S = 3.0
+CARD_FADE = 0.3
+CARD_LOGO_W, CARD_LOGO_Y = 760, 560
+CARD_LINES_Y = 845       # first line; each next one CARD_LINE_STEP lower
+CARD_LINE_STEP = 130
+CARD_LINK_Y = 1585
 
 # Aeonik Pro is the Mantova Dev brand font. It is proprietary, so it is not in the repo:
 # it must be installed on the machine. If it is missing, libass silently falls back to
@@ -117,27 +142,10 @@ DEFAULT_STYLE = {
     "uppercase": True,
 }
 
-EVENT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-REQUIRED_TOP_KEYS = {"event": str, "source_transcript": str, "candidates": list}
-REQUIRED_CANDIDATE_KEYS = {
-    "id": int,
-    "start_seg": int,
-    "end_seg": int,
-    "start_quote": str,
-    "end_quote": str,
-    "score": (int, float),
-    "hook": str,
-    "reason": str,
-    "needs_visuals": bool,
-}
-
 
 # ---------------------------------------------------------------- shared helpers
 
 def fail(msg: str) -> NoReturn:
-    """Print a one-line error and exit 1. NoReturn tells type checkers that nothing after
-    a fail() call runs, so values set before it are not seen as possibly missing."""
     print(f"clips.py: error: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -148,33 +156,17 @@ def repo_root() -> Path:
 
 
 def run(cmd, **kwargs):
-    """Print the command, then run it. Fails cleanly if the binary is missing."""
+    """Print the command, then run it."""
     print("Running: " + " ".join(str(c) for c in cmd), file=sys.stderr)
-    try:
-        return subprocess.run(cmd, **kwargs)
-    except FileNotFoundError:
-        fail(f"{cmd[0]} not found on PATH")
+    return subprocess.run(cmd, **kwargs)
 
 
-def validate_event(event):
-    if not event or not EVENT_RE.match(event):
-        fail(f"--event must match YYYY-MM-DD, got: {event}")
+def work_dir_for(root: Path, event: str, override: Optional[str] = None) -> Path:
+    return Path(override).resolve() if override else root / "clips" / "work" / event
 
 
-def work_dir_for(root: Path, event: str, override: Optional[str]) -> Path:
-    if override:
-        return Path(override).resolve()
-    return root / "clips" / "work" / event
-
-
-def load_json(path: Path, what: str):
-    if not path.is_file():
-        fail(f"{what} not found: {path}")
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        fail(f"{what} is not valid JSON ({path}): {e}")
+def load_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save_json(path: Path, data):
@@ -184,62 +176,33 @@ def save_json(path: Path, data):
         f.write("\n")
 
 
+def ffprobe(path: Path, entries: str, streams: Optional[str] = "v:0") -> str:
+    """ffprobe's csv output for these entries, of these streams (None: the file)."""
+    select = ["-select_streams", streams] if streams else []
+    return subprocess.run(["ffprobe", "-v", "error", *select, "-show_entries", entries, "-of", "csv=p=0",
+                           str(path)], capture_output=True, text=True).stdout.strip()
+
+
 def ffprobe_duration(path: Path) -> float:
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-            capture_output=True, text=True, check=True,
-        )
-    except FileNotFoundError:
-        fail("ffprobe not found on PATH. Install with: brew install ffmpeg-full")
-    except subprocess.CalledProcessError as e:
-        fail(f"ffprobe failed on {path}: {e.stderr.strip()}")
-    try:
-        return float(out.stdout.strip())
-    except ValueError:
-        fail(f"ffprobe returned an unparseable duration for {path}: {out.stdout!r}")
+    return float(ffprobe(path, "format=duration", None))
 
 
 def ffprobe_size(path: Path):
-    proc = run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=width,height", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
-    )
-    try:
-        width, height = (int(x) for x in proc.stdout.strip().split(",")[:2])
-        return width, height
-    except ValueError:
-        fail(f"could not read the video size of {path}")
+    width, height = ffprobe(path, "stream=width,height").split(",")[:2]
+    return int(width), int(height)
 
 
 def ffprobe_fps(path: Path) -> str:
     """Frame rate of the first video stream as ffmpeg prints it, e.g. "30/1" or "30000/1001"."""
-    proc = run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=r_frame_rate", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
-    )
-    fps = proc.stdout.strip().split(",")[0]
-    if not re.match(r"^\d+/\d+$", fps) or fps.endswith("/0"):
-        fail(f"could not read the frame rate of {path}")
-    return fps
+    return ffprobe(path, "stream=r_frame_rate").split(",")[0]
 
 
 def ffprobe_video(path: Path):
     """(fps, start time, frame count) of the first video stream. The start time matters:
     a cut clip's first frame often sits one frame after the audio start."""
-    proc = run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=r_frame_rate,start_time,nb_frames", "-of", "json", str(path)],
-        capture_output=True, text=True,
-    )
-    try:
-        stream = json.loads(proc.stdout)["streams"][0]
-        num, den = (int(x) for x in stream["r_frame_rate"].split("/"))
-        return num / den, float(stream["start_time"]), int(stream["nb_frames"])
-    except (ValueError, KeyError, IndexError, ZeroDivisionError):
-        fail(f"could not read the frame rate, start time and frame count of {path}")
+    rate, start, frames = ffprobe(path, "stream=r_frame_rate,start_time,nb_frames").split(",")[:3]
+    num, den = (int(x) for x in rate.split("/"))
+    return num / den, float(start), int(frames)
 
 
 def mmss(seconds: float) -> str:
@@ -254,16 +217,9 @@ def clock(seconds: float) -> str:
 
 
 def parse_clock(text: str) -> float:
-    """Accept plain seconds ("63.5") or M:SS(.s) ("1:03.5")."""
-    parts = text.strip().split(":")
-    if len(parts) > 2:
-        raise ValueError(text)
-    value = float(parts[-1])
-    if len(parts) == 2:
-        value += int(parts[0]) * 60
-    if value < 0:
-        raise ValueError(text)
-    return value
+    """Plain seconds ("63.5") or M:SS(.s) ("1:03.5")."""
+    minutes, _, seconds = text.strip().rpartition(":")
+    return int(minutes or 0) * 60 + float(seconds)
 
 
 def srt_time(seconds: float) -> str:
@@ -287,75 +243,32 @@ def ass_time(seconds: float) -> str:
 # ==================================================================
 
 def cmd_ingest(args, root: Path, work_dir: Path):
-    source = Path(args.source)
-    if not source.exists():
-        fail(f"source not found: {source}")
-
-    print("Checking ffmpeg for libass support (needed later for caption burn-in)...")
-    filters = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True)
-    if re.search(r"\bass\b", filters.stdout or ""):
-        print("  ok: ass filter present")
-    else:
-        print("WARNING: ffmpeg is missing the 'ass' filter (no libass). The burn step will fail.", file=sys.stderr)
-        print("WARNING: on macOS, install Homebrew ffmpeg-full instead of plain ffmpeg.", file=sys.stderr)
-
-    source_abs = source.resolve()
-    print(f"Output directory: {work_dir}")
+    """source.mp4 (a symlink to an .mp4 source, else a stream-copy remux) and audio.wav
+    (one audio track, 16 kHz mono), plus ingest.json saying where they came from."""
+    source = Path(args.source).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
+    out_mp4, out_wav = work_dir / "source.mp4", work_dir / "audio.wav"
+    out_mp4.unlink(missing_ok=True)
+    if source.suffix.lower() == ".mp4":
+        out_mp4.symlink_to(source)
+    elif run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
+              "-c", "copy", "-map", "0", "-movflags", "+faststart", str(out_mp4)]).returncode:
+        fail("remux to mp4 failed")
 
-    out_mp4 = work_dir / "source.mp4"
-    out_wav = work_dir / "audio.wav"
+    print("Audio streams in source (pick a mic-only one with --audio-track):")
+    print(ffprobe(source, "stream=index,codec_name,channels:stream_tags=title", "a"))
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source), "-map",
+            f"0:a:{args.audio_track}", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out_wav)]).returncode:
+        fail(f"audio extraction failed for track a:{args.audio_track}")
 
-    if not args.force:
-        if out_mp4.exists() or out_mp4.is_symlink():
-            fail(f"{out_mp4} already exists (use --force to overwrite)")
-        if out_wav.exists():
-            fail(f"{out_wav} already exists (use --force to overwrite)")
-
-    if source_abs.suffix.lower() == ".mp4":
-        print("Source is already .mp4: creating a symlink instead of copying.")
-        if out_mp4.exists() or out_mp4.is_symlink():
-            out_mp4.unlink()
-        out_mp4.symlink_to(source_abs)
-        print(f"  linked {out_mp4} -> {source_abs}")
-    else:
-        print(f"Remuxing {source_abs} to {out_mp4} (stream copy, no re-encode)...")
-        proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source_abs),
-                    "-c", "copy", "-map", "0", "-movflags", "+faststart", str(out_mp4)])
-        if proc.returncode != 0:
-            if out_mp4.exists():
-                out_mp4.unlink()
-            fail("remux to mp4 failed. Some streams (e.g. certain subtitle or data streams) do not fit "
-                 "in an mp4 container. Pass a recording that holds only video and audio (mp4 or mkv).")
-        print(f"  wrote {out_mp4}")
-
-    print("Audio streams in source:")
-    proc = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a",
-         "-show_entries", "stream=index,codec_name,channels:stream_tags=title",
-         "-of", "csv=p=0", str(source_abs)],
-        capture_output=True, text=True,
-    )
-    for n, line in enumerate(proc.stdout.splitlines()):
-        parts = line.split(",")
-        parts += [""] * (4 - len(parts))
-        index, codec, channels, title = parts[:4]
-        print(f"  a:{n}  index={index}  codec={codec}  channels={channels}  title={title or '(none)'}")
-
-    print(f"Extracting audio track a:{args.audio_track} to 16 kHz mono WAV...")
-    proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source_abs),
-                "-map", f"0:a:{args.audio_track}", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out_wav)])
-    if proc.returncode != 0:
-        fail(f"audio extraction failed for track a:{args.audio_track}. Check the audio stream list above "
-             "and pick a valid --audio-track.")
-    print(f"  wrote {out_wav}")
-
-    duration = ffprobe_duration(out_wav)
-
-    print()
-    print(f"Ingest complete for event {args.event}:")
-    print(f"  video: {out_mp4}")
-    print(f"  audio: {out_wav} (duration: {duration}s)")
+    # A recording can hold an audio track shorter than the video: transcribing it silently
+    # loses the rest of the talk.
+    duration, source_duration = ffprobe_duration(out_wav), ffprobe_duration(source)
+    if abs(duration - source_duration) > 1.0:
+        fail(f"audio.wav lasts {duration:.1f}s, the source {source_duration:.1f}s: try another --audio-track")
+    save_json(work_dir / "ingest.json", {"source": str(source), "audio_track": args.audio_track,
+                                         "duration": round(duration, 2)})
+    print(f"Wrote {out_mp4} and {out_wav} ({duration:.1f}s)")
 
 
 # ==================================================================
@@ -369,15 +282,13 @@ def ms_to_s(value_ms) -> float:
 SPECIAL_TOKEN_RE = re.compile(r"^\[_.*\]$")
 
 
-def seg_shift(seg, vad: bool) -> float:
+def seg_shift(seg) -> float:
     """VAD timeline fix: with --vad, whisper-cli (as of 1.9.4) reports segment offsets on
     the original audio timeline but token offsets on the VAD-compressed timeline (silence
-    removed), so token times fall behind by all the silence removed before them.
-    When vad is true, shift each segment's tokens so its first real token lands on the
-    segment start. Silence removed INSIDE a segment is not recovered, so words after an
-    internal pause can be early by the length of that pause."""
-    if not vad:
-        return 0.0
+    removed), so token times fall behind by all the silence removed before them. Shift
+    each segment's tokens so its first real token lands on the segment start. Silence
+    removed INSIDE a segment is not recovered, so words after an internal pause can be
+    early by the length of that pause."""
     t0 = None
     for tok in seg.get("tokens", []) or []:
         if SPECIAL_TOKEN_RE.match(tok.get("text", "")):
@@ -422,12 +333,12 @@ def merge_segment_tokens(tokens, segidx, shift):
     return out
 
 
-def build_compact(raw: dict, event: str, language: str, model_basename: str, vad: bool):
+def build_compact(raw: dict):
     segs = raw.get("transcription") or []
 
     raw_words = []
     for segidx, seg in enumerate(segs):
-        shift = seg_shift(seg, vad)
+        shift = seg_shift(seg)
         raw_words.extend(merge_segment_tokens(seg.get("tokens") or [], segidx, shift))
 
     n = len(raw_words)
@@ -452,103 +363,51 @@ def build_compact(raw: dict, event: str, language: str, model_basename: str, vad
             "text": seg["text"].strip(),
         })
 
-    return {
-        "event": event,
-        "language": language,
-        "model": model_basename,
-        "segments": segments,
-        "words": words,
-    }
+    return {"segments": segments, "words": words}
 
 
 def cmd_transcribe(args, root: Path, work_dir: Path):
-    out_raw_json = work_dir / "transcript.raw.json"
-    out_compact = work_dir / "transcript.json"
-    out_meta = work_dir / "transcript.meta.json"
-
-    if args.compact_only:
-        if not out_raw_json.is_file():
-            fail(f"{out_raw_json} not found. Run transcribe without --compact-only first.")
-        if out_compact.exists() and not args.force:
-            fail(f"{out_compact} already exists (use --force to overwrite)")
-        vad = True
-        if out_meta.is_file():
-            meta = load_json(out_meta, "transcript.meta.json")
-            vad = bool(meta.get("vad", True))
-        model_basename = Path(args.model).name
-        raw = load_json(out_raw_json, "transcript.raw.json")
-        compact = build_compact(raw, args.event, args.language, model_basename, vad)
-        save_json(out_compact, compact)
-        _report_transcribe(args, out_raw_json, out_compact, compact)
-        return
-
-    audio = work_dir / "audio.wav"
-    if not audio.is_file():
-        fail(f"{audio} not found. Run ingest for event {args.event} first.")
-
-    model = Path(args.model)
-    if not model.is_file():
-        fail(f"whisper model not found: {model}\n"
-             "Download ggml-large-v3-turbo.bin manually from https://huggingface.co/ggerganov/whisper.cpp\n"
-             f"and place it at: {model}")
-
-    use_vad = not args.no_vad
-    vad_model = Path(args.vad_model)
-    if use_vad and not vad_model.is_file():
-        fail(f"VAD model not found: {vad_model}\n"
-             "Download the Silero VAD ggml model manually from https://huggingface.co/ggml-org/whisper-vad\n"
-             f"and place it at: {vad_model}\n"
-             "(or pass --no-vad to transcribe without VAD)")
-
-    if not args.force:
-        if out_raw_json.exists():
-            fail(f"{out_raw_json} already exists (use --force to overwrite)")
-        if out_compact.exists():
-            fail(f"{out_compact} already exists (use --force to overwrite)")
-
-    out_raw_prefix = work_dir / "transcript.raw"
-    cmd = ["whisper-cli", "-m", str(model), "-l", args.language, "-ojf",
-           "-of", str(out_raw_prefix), "-f", str(audio)]
-
-    if use_vad:
-        cmd += ["--vad", "--vad-model", str(vad_model)]
-
-    if args.threads:
-        cmd += ["-t", str(args.threads)]
-
-    proc = run(cmd)
-    if proc.returncode != 0:
-        fail("whisper-cli failed. See output above.")
-
-    if not out_raw_json.is_file():
-        fail(f"expected whisper-cli output not found: {out_raw_json}")
-
-    print(f"Deriving compact transcript: {out_compact}")
-    save_json(out_meta, {"vad": use_vad})
-
-    model_basename = model.name
-    raw = load_json(out_raw_json, "transcript.raw.json")
-    compact = build_compact(raw, args.event, args.language, model_basename, use_vad)
-    save_json(out_compact, compact)
-    _report_transcribe(args, out_raw_json, out_compact, compact)
+    """whisper-cli with VAD on audio.wav, then the compact transcript.json. Without VAD,
+    whisper fragments the segments, loses punctuation and invents text over silence."""
+    raw_json = work_dir / "transcript.raw.json"
+    if not args.compact_only:
+        vad_model = root / "clips" / "models" / "ggml-silero-v5.1.2.bin"
+        if run(["whisper-cli", "-m", str(default_model(root)), "-l", LANGUAGE, "-ojf",
+                "-of", str(work_dir / "transcript.raw"), "-f", str(work_dir / "audio.wav"),
+                "--vad", "--vad-model", str(vad_model)]).returncode:
+            fail("whisper-cli failed")
+    compact = build_compact(load_json(raw_json))
+    save_json(work_dir / "transcript.json", compact)
+    print(f"Wrote {work_dir / 'transcript.json'} ({len(compact['segments'])} segments)")
+    suspect = suspect_ranges(compact["segments"])
+    starts = {seg["i"]: seg["s"] for seg in compact["segments"]}
+    print(f"Likely invented text (render marks it with ~): {len(suspect)} stretch(es)")
+    for first, last, why in suspect:
+        print(f"  [{first}] to [{last}] from {mmss(starts[first])}: {why}")
+    print("Also read the first and last minutes: whisper can invent text over silence or applause.")
 
 
-def _report_transcribe(args, out_raw_json, out_compact, compact):
-    word_count = len(compact["words"])
-    segment_count = len(compact["segments"])
-    first_ts = compact["words"][0]["s"] if compact["words"] else None
-    last_ts = compact["words"][-1]["e"] if compact["words"] else None
+def suspect_ranges(segments):
+    """[(first i, last i, why)] for stretches of the transcript that are likely invented:
+    the same sentence over and over, or a run of back-to-back segments lasting whole
+    seconds (whisper's filler timing when it hears no words, e.g. over applause or noise)."""
+    segs = sorted(segments, key=lambda g: g["i"])
+    out = []
 
-    print()
-    print(f"Transcription complete for event {args.event}:")
-    print(f"  raw whisper output: {out_raw_json}")
-    print(f"  compact transcript: {out_compact}")
-    print(f"  segments: {segment_count}")
-    print(f"  words: {word_count}")
-    print(f"  first word starts at: {first_ts}s, last word ends at: {last_ts}s")
-    print()
-    print("REMINDER: read the first and last minutes (clips.py render) for hallucinations:")
-    print("whisper can turn silence, applause or music into invented text.")
+    def runs(test, min_len, why):
+        start = None
+        for n in range(len(segs) + 1):
+            if n < len(segs) and test(n):
+                start = n if start is None else start
+                continue
+            if start is not None and n - start >= min_len:
+                out.append((segs[start]["i"], segs[n - 1]["i"], why))
+            start = None
+
+    runs(lambda n: n > 0 and normalize(segs[n]["text"]) == normalize(segs[n - 1]["text"])
+         or n + 1 < len(segs) and normalize(segs[n]["text"]) == normalize(segs[n + 1]["text"]),
+         SUSPECT_REPEAT, "the same sentence repeated")
+    return sorted(out)
 
 
 # ==================================================================
@@ -556,49 +415,16 @@ def _report_transcribe(args, out_raw_json, out_compact, compact):
 # ==================================================================
 
 def cmd_render(args, root: Path, work_dir: Path):
-    transcript_path = work_dir / "transcript.json"
-    if not transcript_path.is_file():
-        fail(f"{transcript_path} not found. Run transcribe for event {args.event} first.")
-    transcript = load_json(transcript_path, "transcript.json")
-    lines = []
-    for seg in transcript["segments"]:
-        t = int(math.floor(float(seg["s"])))
-        m, s = divmod(t, 60)
-        lines.append(f"[{seg['i']}] {m:02d}:{s:02d} {seg['text']}")
-    sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
+    """One line per segment, `[i] mm:ss text`; `[i]~` marks likely invented text."""
+    segs = load_json(work_dir / "transcript.json")["segments"]
+    suspect = {i for first, last, _ in suspect_ranges(segs) for i in range(first, last + 1)}
+    for seg in segs:
+        print(f"[{seg['i']}]{'~' if seg['i'] in suspect else ''} {mmss(math.floor(seg['s']))} {seg['text']}")
 
 
 # ==================================================================
-# highlight-selection (snap / preview / choose / status)
+# highlight-selection (preview / choose / status)
 # ==================================================================
-
-def validate_highlights(data, path: Path):
-    if not isinstance(data, dict):
-        fail(f"{path}: top level must be a JSON object")
-    for key, typ in REQUIRED_TOP_KEYS.items():
-        if key not in data:
-            fail(f"{path}: missing required top-level key '{key}'")
-        if not isinstance(data[key], typ):
-            fail(f"{path}: '{key}' must be a {typ.__name__}, got {type(data[key]).__name__}")
-    for i, cand in enumerate(data["candidates"]):
-        if not isinstance(cand, dict):
-            fail(f"{path}: candidates[{i}] must be an object")
-        for key, typ in REQUIRED_CANDIDATE_KEYS.items():
-            if key not in cand:
-                fail(f"{path}: candidates[{i}] missing required key '{key}'")
-            if not isinstance(cand[key], typ) or isinstance(cand[key], bool) and typ is not bool:
-                fail(
-                    f"{path}: candidates[{i}].{key} must be {typ}, "
-                    f"got {type(cand[key]).__name__}"
-                )
-        if cand["id"] < 1:
-            fail(f"{path}: candidates[{i}].id must be >= 1, got {cand['id']}")
-
-
-def validate_transcript(data, path: Path):
-    if not isinstance(data, dict) or "segments" not in data or "words" not in data:
-        fail(f"{path}: not a valid transcript.json (missing 'segments' or 'words')")
-
 
 def segments_by_index(transcript):
     return {seg["i"]: seg for seg in transcript["segments"]}
@@ -610,6 +436,11 @@ def words_for_segment(transcript, seg_i):
 
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip()).lower()
+
+
+def norm_word(word: str) -> str:
+    """A word for matching: lower case, punctuation stripped (apostrophes stay)."""
+    return re.sub(r"[^\w']+", "", word.lower())
 
 
 SILENCE_START_RE = re.compile(r"silence_start:\s*(-?[\d.]+)")
@@ -639,121 +470,47 @@ def detect_silences(audio_path: Path, min_s: float = SILENCE_MIN_S, noise: str =
     return sorted(intervals, key=lambda iv: iv["start"])
 
 
-def load_or_build_silences(work_dir: Path, audio_path: Path, refresh: bool):
-    cache_path = work_dir / "silences.json"
-    if not refresh and cache_path.is_file():
-        cached = load_json(cache_path, "silences cache")
-        return cached, cache_path
-    if not audio_path.is_file():
-        fail(f"audio file not found: {audio_path}")
-    print(f"Detecting silences in {audio_path} (this scans the whole file)...", file=sys.stderr)
-    intervals = detect_silences(audio_path)
-    duration = ffprobe_duration(audio_path)
-    cached = {"audio": str(audio_path), "duration": duration, "intervals": intervals}
-    save_json(cache_path, cached)
-    print(f"  wrote {cache_path} ({len(intervals)} silence intervals)", file=sys.stderr)
-    return cached, cache_path
+def silences(work_dir: Path):
+    """Pauses in audio.wav at SILENCE_NOISE, cached in silences.json (a full scan takes a while)."""
+    cache = work_dir / "silences.json"
+    if not cache.is_file():
+        save_json(cache, {"intervals": detect_silences(work_dir / "audio.wav")})
+    return load_json(cache)["intervals"]
 
 
-def compute_cut(cand, segments, transcript, silence_cache):
-    intervals = silence_cache["intervals"]
-    duration_total = silence_cache["duration"]
-    flags = []
-
-    start_seg = cand["start_seg"]
-    end_seg = cand["end_seg"]
-
-    if start_seg not in segments or end_seg not in segments:
-        fail(
-            f"candidate {cand['id']}: start_seg/end_seg out of range "
-            f"(start_seg={start_seg}, end_seg={end_seg}, valid range 0..{len(segments) - 1})"
-        )
-    if start_seg > end_seg:
-        fail(f"candidate {cand['id']}: start_seg ({start_seg}) is after end_seg ({end_seg})")
-
-    if normalize(cand["start_quote"]) != normalize(segments[start_seg]["text"]):
-        flags.append("quote_mismatch")
-    elif normalize(cand["end_quote"]) != normalize(segments[end_seg]["text"]):
-        flags.append("quote_mismatch")
-
-    S = segments[start_seg]["s"]
-    E = segments[end_seg]["e"]
-    last_seg_words = sorted(words_for_segment(transcript, end_seg), key=lambda w: w["s"])
-    Lw = last_seg_words[-1]["s"] if last_seg_words else E
-
-    # START: find a silence interval whose END (speech onset) is near S.
-    start_candidates = [iv for iv in intervals if (S - START_WINDOW) <= iv["end"] <= (S + START_WINDOW)]
-    if start_candidates:
-        iv = min(start_candidates, key=lambda iv: abs(iv["end"] - S))
-        silence_len = iv["end"] - iv["start"]
-        lead = min(MAX_LEAD, silence_len / 2)
-        start = iv["end"] - lead
-        start_snapped = True
-    else:
-        start = max(0.0, S - 0.2)
-        start_snapped = False
-
-    # END: find the earliest silence interval whose START is within Lw+0.15 .. E+1.0.
-    end_candidates = sorted(
-        (iv for iv in intervals if (Lw + END_WINDOW_PAD) <= iv["start"] <= (E + END_WINDOW_TAIL)),
-        key=lambda iv: iv["start"],
-    )
-    if end_candidates:
-        iv = end_candidates[0]
-        silence_len = iv["end"] - iv["start"]
-        tail = min(MAX_TAIL, silence_len / 2)
-        end = iv["start"] + tail
-        end_snapped = True
-    else:
-        end = E + 0.2
-        end_snapped = False
-
-    start = max(0.0, min(start, duration_total))
-    end = max(0.0, min(end, duration_total))
-
-    dur = round(end - start, 2)
-    if dur < TOO_SHORT_S:
-        flags.append("too_short")
-    if dur > RAW_TOO_LONG_S:
-        flags.append("too_long")
-
-    return {
-        "segs": [start_seg, end_seg],
-        "start": round(start, 2),
-        "end": round(end, 2),
-        "duration": dur,
-        "start_snapped": start_snapped,
-        "end_snapped": end_snapped,
-        "flags": flags,
-    }
-
-
-def refresh_duration(cut, duration_total=None):
-    """Clamp the cut, recompute its duration and the too_short / too_long flags."""
-    cut["start"] = max(0.0, cut["start"])
-    if duration_total is not None:
-        cut["end"] = min(cut["end"], duration_total)
+def set_edge(cut, edge: str, time: float, kind: str):
+    cut[edge] = round(max(0.0, time), 2)
+    cut["edges"][edge] = kind
     cut["duration"] = round(cut["end"] - cut["start"], 2)
-    cut["flags"] = [f for f in cut["flags"] if f not in ("too_short", "too_long")]
-    if cut["duration"] < TOO_SHORT_S:
-        cut["flags"].append("too_short")
-    if cut["duration"] > RAW_TOO_LONG_S:
-        cut["flags"].append("too_long")
 
 
-def apply_overlap_flags(candidates):
-    # Strip any previous overlap flags, then recompute from current cut times.
-    for c in candidates:
-        if "cut" in c:
-            c["cut"]["flags"] = [f for f in c["cut"]["flags"] if not f.startswith("overlaps_candidate_")]
-    with_cut = [c for c in candidates if "cut" in c]
-    for i, a in enumerate(with_cut):
-        for b in with_cut[i + 1:]:
-            a_s, a_e = a["cut"]["start"], a["cut"]["end"]
-            b_s, b_e = b["cut"]["start"], b["cut"]["end"]
-            if a_s < b_e and b_s < a_e:
-                a["cut"]["flags"].append(f"overlaps_candidate_{b['id']}")
-                b["cut"]["flags"].append(f"overlaps_candidate_{a['id']}")
+def compute_cut(cand, transcript, work_dir: Path, model: Path):
+    """The cut for a candidate: each edge placed on its quote's words, in a fresh alignment
+    of the audio around it (see refine_edge); where the words are not found, just outside
+    the segment ("rough")."""
+    segs = segments_by_index(transcript)
+    first, last = segs[cand["start_seg"]], segs[cand["end_seg"]]
+    if (normalize(cand["start_quote"]) != normalize(first["text"])
+            or normalize(cand["end_quote"]) != normalize(last["text"])):
+        fail(f"candidate {cand['id']}: start_quote and end_quote must be the exact text of segments "
+             f"{cand['start_seg']} and {cand['end_seg']}")
+    last_words = words_for_segment(transcript, cand["end_seg"])
+    cut = {"segs": [cand["start_seg"], cand["end_seg"]], "start": 0.0, "end": 0.0, "edges": {}}
+    for edge, rough, fallback, quote in (
+            ("start", first["s"], first["s"] - 0.2, cand["start_quote"]),
+            ("end", last_words[-1]["s"] if last_words else last["e"], last["e"] + 0.2, cand["end_quote"])):
+        set_edge(cut, edge, *(refine_edge(work_dir, rough, quote, edge, model) or (fallback, "rough")))
+    return cut
+
+
+def duration_note(duration: float) -> str:
+    if duration < TOO_SHORT_S:
+        return f", under {TOO_SHORT_S:.0f}s: works only as a piece of a montage"
+    if duration > RAW_TOO_LONG_S:
+        return f", over {RAW_TOO_LONG_S:.0f}s: too long, narrow the span"
+    if duration > TOO_LONG_S:
+        return f", over {TOO_LONG_S:.0f}s: needs tighten --drop"
+    return ""
 
 
 def build_preview_srt(cut, transcript, origin: float, total: float) -> str:
@@ -792,36 +549,22 @@ def build_preview_srt(cut, transcript, origin: float, total: float) -> str:
     return "\n".join(blocks)
 
 
-def render_preview(cand, transcript, work_dir: Path, pad: float, duration_total):
+def render_preview(cand, transcript, work_dir: Path, pad: float):
     cut = cand["cut"]
-    source = work_dir / "source.mp4"
-    if not source.exists():
-        fail(f"source video not found: {source}. Run ingest first.")
     origin = max(0.0, cut["start"] - pad)
-    end = cut["end"] + pad
-    if duration_total is not None:
-        end = min(end, duration_total)
-    total = round(end - origin, 2)
-
+    total = round(cut["end"] + pad - origin, 2)
     previews_dir = work_dir / "previews"
     previews_dir.mkdir(parents=True, exist_ok=True)
     name = f"candidate_{cand['id']}"
     (previews_dir / f"{name}.srt").write_text(build_preview_srt(cut, transcript, origin, total), encoding="utf-8")
-
     # Run inside previews_dir so the subtitles filter gets a bare file name (no escaping).
-    cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-ss", f"{origin:.2f}", "-t", f"{total:.2f}", "-i", str(source.resolve()),
-        "-vf", f"scale=-2:480,subtitles={name}.srt:force_style='FontSize=20,Outline=2,MarginV=24'",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", f"{name}.mp4",
-    ]
-    print(f"Rendering preview for candidate {cand['id']} ({total}s)...", file=sys.stderr)
-    proc = run(cmd, cwd=previews_dir, capture_output=True, text=True)
-    if proc.returncode != 0:
-        fail(f"ffmpeg failed rendering preview for candidate {cand['id']}: {proc.stderr.strip()}")
-    cut["preview"] = {"file": f"previews/{name}.mp4", "origin": round(origin, 2), "pad": pad}
-    print(f"  wrote {previews_dir / (name + '.mp4')}", file=sys.stderr)
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{origin:.2f}", "-t", f"{total:.2f}", "-i", str((work_dir / "source.mp4").resolve()),
+            "-vf", f"scale=-2:480,subtitles={name}.srt:force_style='FontSize=20,Outline=2,MarginV=24'",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", f"{name}.mp4"], cwd=previews_dir).returncode:
+        fail(f"ffmpeg failed rendering the preview of candidate {cand['id']}")
+    cut["preview"] = {"file": f"previews/{name}.mp4", "origin": round(origin, 2)}
 
 
 def candidate_segments(cand, transcript):
@@ -848,291 +591,232 @@ def candidate_segments(cand, transcript):
     return out
 
 
-def find_phrase_time(transcript, silences, phrase: str, near, edge: str, cand_id):
-    """Source time for a cut edge given by words: the start of the phrase (edge "start")
-    or the end of it (edge "end"), moved onto a nearby pause when there is one. Word
-    times are rough and tend to run early (up to about a second), so the search for a
-    pause reaches further forward than back, and the human still checks the re-rendered
-    preview."""
-    def norm(word):
-        return re.sub(r"[^\w']+", "", word.lower())
-    target = [norm(w) for w in phrase.split() if norm(w)]
-    if not target:
-        fail(f"candidate {cand_id}: empty phrase")
-    words = [w for w in transcript["words"] if near[0] - PHRASE_SEARCH_S <= w["s"] <= near[1] + PHRASE_SEARCH_S]
-    normed = [norm(w["w"]) for w in words]
-    hits = [i for i in range(len(words) - len(target) + 1) if normed[i:i + len(target)] == target]
+def phrase_edge(work_dir: Path, transcript, cut, phrase: str, edge: str, model: Path):
+    """(time, kind) for an edge given by words quoted from the transcript: the start of
+    the phrase or the end of it, searched around the current cut."""
+    words = [w for w in transcript["words"]
+             if cut["start"] - PHRASE_SEARCH_S <= w["s"] <= cut["end"] + PHRASE_SEARCH_S]
+    hits, n = find_words(words, phrase)
     if not hits:
-        fail(f"candidate {cand_id}: \"{phrase}\" not found near this clip. Copy the words exactly as "
-             "they appear in the transcript (clips.py status).")
-    if len(hits) > 1:
-        fail(f"candidate {cand_id}: \"{phrase}\" appears {len(hits)} times near this clip. Use a longer phrase.")
-    i = hits[0]
+        fail(f"\"{phrase}\" not found near this clip: copy the words exactly from the transcript")
+    w = words[hits[0]] if edge == "start" else words[hits[0] + n - 1]
+    fallback = w["s"] - 0.15 if edge == "start" else w["e"] + 0.15
+    return refine_edge(work_dir, w["s"], phrase, edge, model) or (fallback, "rough")
+
+
+EDGE_KINDS = {
+    "hand": "set by hand",
+    "pause": "on a pause",
+    "tight": "on the words, no pause there (check the preview)",
+    "rough": "NOT checked against the words (check the preview)",
+}
+
+
+def default_model(root: Path) -> Path:
+    return root / "clips" / "models" / "ggml-large-v3-turbo.bin"
+
+
+def edge_window(work_dir: Path, t0: float, t1: float, model: Path):
+    """Words (DTW start times) and quiet runs of the source audio between t0 and t1, in
+    source seconds. Quiet runs come at SILENCE_NOISE, then at each louder floor, like
+    tighten --drop uses them. Cached in edges/, so re-running preview or choose does not run
+    whisper again."""
+    t0, t1 = max(0.0, round(t0, 1)), round(t1, 1)
+    cache_dir = work_dir / "edges"
+    name = f"{t0:.1f}-{t1:.1f}"
+    cache = cache_dir / f"{name}.json"
+    if cache.is_file():
+        return load_json(cache)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    wav = cache_dir / f"{name}.wav"
+    proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{t0:.2f}",
+                "-t", f"{t1 - t0:.2f}", "-i", str(work_dir / "audio.wav"), "-c:a", "pcm_s16le", str(wav)])
+    if proc.returncode != 0:
+        fail(f"ffmpeg failed extracting {name} from audio.wav")
+    raw_prefix = cache_dir / f"{name}.raw"
+    quiet = [[{"start": r["start"] + t0, "end": r["end"] + t0}
+              for r in merge_quiet_runs(detect_silences(wav, TIGHT_DETECT_S, noise), TIGHT_MERGE_S)]
+             for noise in (SILENCE_NOISE,) + DROP_NOISE_LADDER]
+    words = []
+    for w in dtw_words(model, wav, raw_prefix):
+        word = {"w": w["w"], "s": w["s"] + t0, "e": w["e"] + t0}
+        # The first word of a whisper segment starts at the segment start, which often
+        # sits at the start of the pause before the word; its DTW time runs late. When a
+        # pause starts right at the segment start, the word starts where that pause ends.
+        if "dtw" in w:
+            dtw = w["dtw"] + t0
+            gaps = [r for runs in quiet for r in runs
+                    if abs(r["start"] - word["s"]) <= 0.2 and r["end"] <= dtw + 0.3]
+            if gaps:
+                word["s"] = min(max(r["end"] for r in gaps), dtw)
+        words.append(word)
+    data = {"words": words, "quiet": quiet}
+    save_json(cache, data)
+    wav.unlink()
+    Path(str(raw_prefix) + ".json").unlink(missing_ok=True)
+    return data
+
+
+def locate_words(words, phrase: str, edge: str, near: float):
+    """Index in words of the first (edge "start") or last (edge "end") word of phrase.
+    Matches up to EDGE_MATCH words at that end of the phrase, then fewer, down to one word
+    if it is long enough not to be a filler ("e", "di", "che"), taking the hit nearest to
+    near. The two transcriptions often differ by a word, hence the fallback. None if not
+    found."""
+    target = [norm_word(w) for w in phrase.split() if norm_word(w)]
+    normed = [norm_word(w["w"]) for w in words]
+    for k in range(min(EDGE_MATCH, len(target)), 0, -1):
+        part = target[:k] if edge == "start" else target[-k:]
+        if k == 1 and len(target) > 1 and len(part[0]) < 4:
+            break
+        hits = [i for i in range(len(normed) - k + 1) if normed[i:i + k] == part]
+        if edge == "end":
+            hits = [i + k - 1 for i in hits]
+        hits = [i for i in hits if abs(words[i]["s"] - near) <= EDGE_NEAR]
+        if hits:
+            return min(hits, key=lambda i: abs(words[i]["s"] - near))
+    return None
+
+
+def place_edge(data, i: int, edge: str):
+    """(source time, "pause" or "tight") for a cut edge at words[i]: the start of that word
+    or the end of it. On a pause between it and its neighbour when there is one, at the
+    quietest floor that shows one; otherwise tight against the neighbouring word."""
+    words = data["words"]
     if edge == "start":
         t = words[i]["s"]
-        near_pauses = [iv for iv in silences if t - 0.6 <= iv["end"] <= t + 1.2]
-        if near_pauses:
-            iv = min(near_pauses, key=lambda iv: abs(iv["end"] - t))
-            return iv["end"] - min(MAX_LEAD, (iv["end"] - iv["start"]) / 2)
-        return max(0.0, t - 0.15)
-    last = words[i + len(target) - 1]
-    t = last["e"]
-    near_pauses = [iv for iv in silences if last["s"] + 0.1 <= iv["start"] <= t + 1.5]
-    if near_pauses:
-        iv = min(near_pauses, key=lambda iv: iv["start"])
-        return iv["start"] + min(MAX_TAIL, (iv["end"] - iv["start"]) / 2)
-    return t + 0.15
+        lo = words[i - 1]["s"] + 0.15 if i > 0 else t - EDGE_PAD
+        for runs in data["quiet"]:
+            near = [r for r in runs if r["end"] > lo and t - 0.5 <= r["end"] and r["start"] < t + 0.1]
+            if near:
+                r = max(near, key=lambda r: r["end"] - max(r["start"], lo))
+                return r["end"] - min(MAX_LEAD, (r["end"] - max(r["start"], lo)) / 2), "pause"
+        return max(0.0, t - EDGE_GUARD), "tight"
+    s = words[i]["s"]
+    nxt = words[i + 1]["s"] if i + 1 < len(words) else None
+    hi = nxt if nxt is not None else s + EDGE_PAD
+    # A next word that starts before this one can be over has a DTW time that ran early:
+    # look for the pause up to the word after it.
+    if nxt is not None and nxt < s + 0.3 + 0.07 * len(words[i]["w"]) and i + 2 < len(words):
+        hi = words[i + 2]["s"]
+    for runs in data["quiet"]:
+        near = [r for r in runs if s + 0.15 <= r["start"] < hi]
+        if near:
+            r = max(near, key=lambda r: min(r["end"], hi) - r["start"])
+            return r["start"] + min(MAX_TAIL, (min(r["end"], hi) - r["start"]) / 2), "pause"
+    if nxt is not None:
+        return nxt - EDGE_GUARD, "tight"
+    return None
 
 
-def print_status(highlights, event, transcript):
-    """One block per candidate: id, score, chosen or not, segment range, duration,
-    flags, whether each cut edge sits on a pause, any manual adjustment, the hook,
-    and if a preview exists its path and the M:SS.s in/out for the player."""
+def refine_edge(work_dir: Path, rough: float, phrase: str, edge: str, model: Path):
+    """(source time, "pause" or "tight") for an edge at the start or end of phrase, whose
+    rough time comes from the full transcript; None when the words are not found."""
+    # The window starts and ends on a pause when there is one near: whisper aligns a
+    # stretch that starts mid-sentence much worse.
+    t0, t1 = rough - EDGE_PAD, rough + EDGE_PAD
+    intervals = silences(work_dir)
+    before = [iv["end"] for iv in intervals if rough - EDGE_PAD - 3 <= iv["end"] <= rough - 2]
+    after = [iv["start"] for iv in intervals if rough + 2 <= iv["start"] <= rough + EDGE_PAD + 3]
+    if before:
+        t0 = max(before) - 0.2
+    if after:
+        t1 = min(after) + 0.2
+    data = edge_window(work_dir, t0, t1, model)
+    i = locate_words(data["words"], phrase, edge, rough)
+    return None if i is None else place_edge(data, i, edge)
+
+
+def print_status(highlights, event, transcript, ids=None):
+    """One block per candidate (only those in ids, when given): id, chosen or not, note,
+    segment range, duration, how each cut edge was placed, where the clip sits in its
+    preview, and the text inside the cut plus one sentence either side."""
     print(f"Highlight candidates: {event}")
     print()
+    suspect = suspect_ranges(transcript["segments"])
     for cand in sorted(highlights["candidates"], key=lambda c: c["id"]):
+        if ids is not None and cand["id"] not in ids:
+            continue
         cut = cand.get("cut")
-        chosen = cand.get("chosen", False)
-        marker = " [CHOSEN]" if chosen else ""
-        print(f"Candidate {cand['id']}: score {cand['score']}{marker}")
+        print(f"Candidate {cand['id']}{' [CHOSEN]' if cand.get('chosen') else ''}")
+        if cand.get("note"):
+            print(f"  note: {cand['note']}")
         print(f"  segments: {cand['start_seg']} to {cand['end_seg']}")
+        for first, last, why in suspect:
+            if first <= cand["end_seg"] and cand["start_seg"] <= last:
+                print(f"  warning: segments {first} to {last} look invented ({why}): check the preview")
         if cut:
-            over = f", over {TOO_LONG_S:.0f}s: needs tighten --drop" if cut["duration"] > TOO_LONG_S else ""
-            print(f"  range: {mmss(cut['start'])} to {mmss(cut['end'])} ({cut['duration']}s{over})")
-            flags = ", ".join(cut["flags"]) if cut["flags"] else "none"
-            print(f"  flags: {flags}")
-            manual = cut.get("manual_shift") or {}
-            edges = []
-            for edge in ("start", "end"):
-                if edge in manual:
-                    edges.append(f"{edge} set by hand ({manual[edge]:+g}s from the snapped cut)")
-                elif cut[f"{edge}_snapped"]:
-                    edges.append(f"{edge} on a pause")
-                else:
-                    edges.append(f"{edge} NOT on a pause (check the preview)")
-            print(f"  cut edges: {', '.join(edges)}")
+            print(f"  range: {mmss(cut['start'])} to {mmss(cut['end'])} ({cut['duration']}s{duration_note(cut['duration'])})")
+            print(f"  cut edges: start {EDGE_KINDS[cut['edges']['start']]}, end {EDGE_KINDS[cut['edges']['end']]}")
             if cut.get("preview"):
-                pv = cut["preview"]
-                clip_in = cut["start"] - pv["origin"]
-                clip_out = cut["end"] - pv["origin"]
-                print(f"  preview: {pv['file']}")
-                print(f"  in the player the clip runs from {clock(clip_in)} to {clock(clip_out)}")
-        else:
-            print("  range: not snapped yet")
-        print(f"  needs visuals: {'yes' if cand['needs_visuals'] else 'no'}")
-        print(f"  hook: {cand['hook']}")
+                origin = cut["preview"]["origin"]
+                print(f"  preview: {cut['preview']['file']}, the clip runs from "
+                      f"{clock(cut['start'] - origin)} to {clock(cut['end'] - origin)} in the player")
         print("  transcript (what is inside the cut, plus one sentence of context either side):")
         for label, seg in candidate_segments(cand, transcript):
             print(f"    {label:9}[{seg['i']}] {seg['text']}")
         print()
 
 
-def cmd_snap(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    transcript_path = work_dir / "transcript.json"
-
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-    transcript = load_json(transcript_path, "transcript.json")
-    validate_transcript(transcript, transcript_path)
-    segments = segments_by_index(transcript)
-
-    audio_path = work_dir / "audio.wav"
-    silence_cache, cache_path = load_or_build_silences(work_dir, audio_path, args.refresh_silence)
-
-    for cand in highlights["candidates"]:
-        old = cand.get("cut") or {}
-        cut = compute_cut(cand, segments, transcript, silence_cache)
-        # Same segment span as before: keep the human's manual adjustments, and the
-        # preview if the cut did not move. A changed span starts from scratch.
-        if old.get("segs") == cut["segs"]:
-            manual = old.get("manual_shift") or {}
-            for edge, shift in manual.items():
-                cut[edge] = round(cut[edge] + shift, 2)
-            if manual:
-                cut["manual_shift"] = manual
-                refresh_duration(cut, silence_cache["duration"])
-            if old.get("preview") and (old["start"], old["end"]) == (cut["start"], cut["end"]):
-                cut["preview"] = old["preview"]
-        cand["cut"] = cut
-        cand.setdefault("chosen", False)
-
-    apply_overlap_flags(highlights["candidates"])
-
-    save_json(highlights_path, highlights)
-    print(f"Wrote {highlights_path}", file=sys.stderr)
-    print_status(highlights, args.event, transcript)
+def load_selection(work_dir: Path):
+    return load_json(work_dir / "highlights.json"), load_json(work_dir / "transcript.json")
 
 
-def parse_id_phrases(pairs):
-    """["2=mila euro", ...] -> {2: "mila euro"}."""
-    phrases = {}
-    for pair in pairs or []:
-        id_str, sep, phrase = pair.partition("=")
-        if not sep or not id_str.strip().isdigit() or not phrase.strip():
-            fail(f"invalid argument (expected ID=WORDS): {pair}")
-        phrases[int(id_str)] = phrase.strip()
-    return phrases
+def parse_ids(text) -> set:
+    return {int(x) for x in (text or "").split(",") if x.strip()}
 
 
-def parse_id_times(pairs):
-    """["2=0:12", ...] -> {2: 12.0}. Times are seconds or M:SS."""
-    times = {}
-    for pair in pairs or []:
-        if "=" not in pair:
-            fail(f"invalid argument (expected ID=TIME): {pair}")
-        id_str, sec_str = pair.split("=", 1)
-        try:
-            cid = int(id_str)
-            sec = parse_clock(sec_str)
-        except ValueError:
-            fail(f"invalid argument (expected ID=TIME): {pair}")
-        times[cid] = sec
-    return times
-
-
-def parse_ids(text):
-    try:
-        return {int(x) for x in text.split(",") if x.strip()}
-    except ValueError:
-        fail(f"--ids must be a comma-separated list of integers, got: {text}")
-
-
-def cmd_choose(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    transcript_path = work_dir / "transcript.json"
-
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-    transcript = load_json(transcript_path, "transcript.json")
-    validate_transcript(transcript, transcript_path)
-
-    chosen_ids = parse_ids(args.ids) if args.ids else set()
-    unchosen_ids = parse_ids(args.unchoose) if args.unchoose else set()
-
-    known_ids = {c["id"] for c in highlights["candidates"]}
-    unknown = (chosen_ids | unchosen_ids) - known_ids
-    if unknown:
-        fail(f"unknown candidate id(s): {sorted(unknown)} (known: {sorted(known_ids)})")
-
-    at_start = parse_id_times(args.start)
-    at_end = parse_id_times(args.end)
-    words_start = parse_id_phrases(args.start_at)
-    words_end = parse_id_phrases(args.end_after)
-    silences = []
-    if words_start or words_end:
-        silences = load_json(work_dir / "silences.json", "silences cache (run snap first)")["intervals"]
-    reset_ids = set()
-    for text in args.reset or []:
-        try:
-            reset_ids.add(int(text))
-        except ValueError:
-            fail(f"--reset must be an integer candidate id, got: {text}")
-    for cid in list(at_start) + list(at_end) + list(words_start) + list(words_end) + list(reset_ids):
-        if cid not in known_ids:
-            fail(f"unknown candidate id: {cid} (known: {sorted(known_ids)})")
-    for cid in reset_ids:
-        if cid in at_start or cid in at_end or cid in words_start or cid in words_end:
-            fail(f"candidate {cid}: use either --reset or an edge option, not both")
-    for cid in set(at_start) & set(words_start):
-        fail(f"candidate {cid}: use either --start or --start-at, not both")
-    for cid in set(at_end) & set(words_end):
-        fail(f"candidate {cid}: use either --end or --end-after, not both")
-
-    audio_path = work_dir / "audio.wav"
-    duration_total = ffprobe_duration(audio_path) if audio_path.is_file() else None
-
-    for cand in highlights["candidates"]:
-        if cand["id"] in chosen_ids | unchosen_ids:
-            cand["chosen"] = cand["id"] in chosen_ids
-        cut = cand.get("cut")
-        if cut is None:
-            continue
-        before = (cut["start"], cut["end"])
-        manual = dict(cut.pop("manual_shift", {}))
-        touched = False
-
-        if cand["id"] in reset_ids:
-            for edge in ("start", "end"):
-                if edge in manual:
-                    cut[edge] = round(cut[edge] - manual.pop(edge), 2)
-                    touched = True
-
-        # A shift is always relative to the snapped cut. An edge named in this call has
-        # its earlier shift undone and replaced; edges not named keep what they had, so
-        # candidates can be adjusted one at a time without losing earlier adjustments.
-        for edge, given, phrases in (("start", at_start, words_start), ("end", at_end, words_end)):
-            if cand["id"] not in given and cand["id"] not in phrases:
-                continue
-            touched = True
-            if cand["id"] in given:
-                # a time read off the preview player
-                if not cut.get("preview"):
-                    fail(f"candidate {cand['id']}: --{edge} needs a rendered preview; run the preview subcommand first")
-                target = cut["preview"]["origin"] + given[cand["id"]]
-            else:
-                # words quoted from the transcript
-                target = find_phrase_time(transcript, silences, phrases[cand["id"]],
-                                          (cut["start"], cut["end"]), edge, cand["id"])
-            snapped = round(cut[edge] - manual.pop(edge, 0.0), 2)
-            shift = round(target - snapped, 2)
-            cut[edge] = round(snapped + shift, 2)
-            if shift:
-                manual[edge] = shift
-
-        if touched:
-            refresh_duration(cut, duration_total)
-        if manual:
-            cut["manual_shift"] = manual
-        if cut["end"] <= cut["start"]:
-            fail(f"candidate {cand['id']}: cut end ({cut['end']}) is not after cut start ({cut['start']})")
-        if cut.get("preview") and (cut["start"], cut["end"]) != before:
-            render_preview(cand, transcript, work_dir, cut["preview"]["pad"], duration_total)
-
-    apply_overlap_flags(highlights["candidates"])
-
-    save_json(highlights_path, highlights)
-    print(f"Wrote {highlights_path}", file=sys.stderr)
-    print_status(highlights, args.event, transcript)
+def id_pairs(values):
+    """["2=mila euro", ...] -> [(2, "mila euro"), ...]"""
+    return [(int(cid), value.strip()) for cid, _, value in (v.partition("=") for v in values or [])]
 
 
 def cmd_preview(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    transcript_path = work_dir / "transcript.json"
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-    transcript = load_json(transcript_path, "transcript.json")
-    validate_transcript(transcript, transcript_path)
+    """Compute the cut of every new or re-spanned candidate and render its preview (and
+    the preview of the --ids candidates)."""
+    highlights, transcript = load_selection(work_dir)
+    wanted = parse_ids(args.ids)
+    for cand in highlights["candidates"]:
+        if cand.get("cut", {}).get("segs") != [cand["start_seg"], cand["end_seg"]]:
+            cand["cut"] = compute_cut(cand, transcript, work_dir, default_model(root))
+            wanted.add(cand["id"])
+    for cand in highlights["candidates"]:
+        if cand["id"] in wanted:
+            render_preview(cand, transcript, work_dir, args.pad)
+    save_json(work_dir / "highlights.json", highlights)
+    print_status(highlights, args.event, transcript, wanted)
 
-    wanted = None
-    if args.ids:
-        wanted = parse_ids(args.ids)
-        unknown = wanted - {c["id"] for c in highlights["candidates"]}
-        if unknown:
-            fail(f"--ids references unknown candidate id(s): {sorted(unknown)}")
 
-    audio_path = work_dir / "audio.wav"
-    duration_total = ffprobe_duration(audio_path) if audio_path.is_file() else None
-
-    for cand in sorted(highlights["candidates"], key=lambda c: c["id"]):
-        if wanted is not None and cand["id"] not in wanted:
-            continue
-        if "cut" not in cand:
-            fail(f"candidate {cand['id']} has no cut yet; run the snap subcommand first")
-        render_preview(cand, transcript, work_dir, args.pad, duration_total)
-
-    save_json(highlights_path, highlights)
-    print_status(highlights, args.event, transcript)
+def cmd_choose(args, root: Path, work_dir: Path):
+    """Mark candidates chosen or not, and move cut edges: to a time read off the preview
+    player, or onto words quoted from the transcript. Moved edges re-render the preview."""
+    highlights, transcript = load_selection(work_dir)
+    cands = {c["id"]: c for c in highlights["candidates"]}
+    model = default_model(root)
+    touched, moved = parse_ids(args.ids) | parse_ids(args.unchoose), set()
+    for cid in touched:
+        cands[cid]["chosen"] = cid in parse_ids(args.ids)
+    for cid in parse_ids(args.reset):
+        cands[cid]["cut"] = compute_cut(cands[cid], transcript, work_dir, model)
+        moved.add(cid)
+    for edge, times, phrases in (("start", args.start, args.start_at), ("end", args.end, args.end_after)):
+        for cid, value in id_pairs(times):
+            cut = cands[cid]["cut"]
+            set_edge(cut, edge, cut["preview"]["origin"] + parse_clock(value), "hand")
+            moved.add(cid)
+        for cid, phrase in id_pairs(phrases):
+            cut = cands[cid]["cut"]
+            set_edge(cut, edge, *phrase_edge(work_dir, transcript, cut, phrase, edge, model))
+            moved.add(cid)
+    for cid in moved:
+        render_preview(cands[cid], transcript, work_dir, PREVIEW_PAD)
+    save_json(work_dir / "highlights.json", highlights)
+    print_status(highlights, args.event, transcript, touched | moved)
 
 
 def cmd_status(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    transcript_path = work_dir / "transcript.json"
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-    transcript = load_json(transcript_path, "transcript.json")
-    validate_transcript(transcript, transcript_path)
-    print_status(highlights, args.event, transcript)
+    highlights, transcript = load_selection(work_dir)
+    print_status(highlights, args.event, transcript, parse_ids(args.ids) or None)
 
 
 # ==================================================================
@@ -1140,48 +824,28 @@ def cmd_status(args, root: Path, work_dir: Path):
 # ==================================================================
 
 def cmd_cut(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    source = work_dir / "source.mp4"
-    out_dir = work_dir / "final"
-
-    if not highlights_path.is_file():
-        fail(f"{highlights_path} not found. Run the highlight-selection steps first.")
-    if not source.exists():
-        fail(f"{source} not found. Run ingest first.")
-
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-
-    if args.ids:
-        wanted = parse_ids(args.ids)
-        cuts = [(c["id"], c["cut"]["start"], c["cut"]["duration"])
-                for c in highlights["candidates"] if c["id"] in wanted and c.get("cut")]
-    else:
-        cuts = [(c["id"], c["cut"]["start"], c["cut"]["duration"])
-                for c in highlights["candidates"] if c.get("chosen") and c.get("cut")]
-
-    if not cuts:
-        fail("nothing to cut: no chosen candidates (run choose --ids ...) or no match for --ids")
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    for cid, start, duration in cuts:
-        out = out_dir / f"clip_{cid}.mp4"
+    """Cut each clip from source.mp4 and align its words for the captions (glossary applied)."""
+    cands = {c["id"]: c for c in load_json(work_dir / "highlights.json")["candidates"]}
+    glossary = load_glossary(root)
+    for cid in clip_ids(args, work_dir):
+        final, base = clip_paths(work_dir, cid)
+        final.mkdir(parents=True, exist_ok=True)
+        out = base.with_suffix(".mp4")
         if out.exists() and not args.force:
-            fail(f"{out} already exists (use --force to overwrite)")
-        print(f"Cutting candidate {cid}: start {start}s, duration {duration}s -> {out}")
+            fail(f"{out} already exists: --force overwrites it and its words file (hand edits included)")
+        cut = cands[cid]["cut"]
         # -ss before -i plus a re-encode gives a frame-accurate cut. Never stream-copy here.
-        proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
-                    "-ss", str(start), "-t", str(duration), "-i", str(source),
-                    "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)])
-        if proc.returncode != 0:
+        if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-ss", str(cut["start"]), "-t", str(cut["duration"]), "-i", str(work_dir / "source.mp4"),
+                "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)]).returncode:
             fail(f"ffmpeg failed cutting candidate {cid}")
-        print(f"  wrote {out}")
+        print(f"Wrote {out}")
+        align_clip(base, default_model(root), glossary)
 
 
 # ==================================================================
-# produce-clip (cut is above; align / burn)
+# produce-clip (cut is above; word alignment, tighten, burn)
 # ==================================================================
 
 def dtw_preset(model_path: Path) -> str:
@@ -1212,10 +876,13 @@ def words_from_raw(raw: dict):
             if cur is None or text.startswith(" "):
                 if cur is not None:
                     words.append(cur)
+                dtw_start = start
                 if first_in_seg:
                     start = seg_start
                     first_in_seg = False
                 cur = {"w": text, "s": start}
+                if start != dtw_start:
+                    cur["dtw"] = dtw_start  # kept for edge_window, which checks it against the pauses
             else:
                 cur["w"] += text
         if cur is not None:
@@ -1246,92 +913,74 @@ def words_from_raw(raw: dict):
     return cleaned
 
 
+def dtw_words(model: Path, wav: Path, raw_prefix: Path):
+    """Words with DTW start times for a 16 kHz mono wav, in seconds from its start.
+    No VAD on purpose: with VAD, token times lose the removed silence. DTW needs flash
+    attention off. Writes <raw_prefix>.json."""
+    proc = run(["whisper-cli", "-m", str(model), "-l", LANGUAGE, "-ojf",
+                "-dtw", dtw_preset(model), "-nfa", "-of", str(raw_prefix), "-f", str(wav)],
+               capture_output=True, text=True)
+    if proc.returncode:
+        fail(f"whisper-cli failed: {proc.stderr.strip()[-400:]}")
+    return words_from_raw(load_json(Path(str(raw_prefix) + ".json")))
+
+
 def clip_paths(work_dir: Path, clip_id: int):
     final = work_dir / "final"
     base = final / f"clip_{clip_id}"
     return final, base
 
 
-def _align_one(root, work_dir, event, clip_id, model, language, force):
-    final, base = clip_paths(work_dir, clip_id)
-    clip = base.with_suffix(".mp4")
-    words_path = Path(str(base) + ".words.tsv")
-    if not clip.is_file():
-        fail(f"{clip} not found. Run the cut subcommand first.")
-    if words_path.exists() and not force:
-        fail(f"{words_path} already exists and may hold human edits (use --force to overwrite)")
-    if not model.is_file():
-        fail(f"whisper model not found: {model} (see clips/README.md for the download)")
+def load_glossary(root: Path):
+    """[(wrong words, right text)] from clips/config/glossary.tsv, longest first: names
+    whisper keeps getting wrong, fixed in every words file cut writes."""
+    lines = (root / "clips" / "config" / "glossary.tsv").read_text(encoding="utf-8").splitlines()
+    entries = [(wrong.split(), right) for wrong, _, right in
+               (line.partition("\t") for line in lines if line.strip() and not line.startswith("#"))]
+    return [([norm_word(w) for w in wrong], right) for wrong, right in sorted(entries, key=lambda e: -len(e[0]))]
 
+
+def apply_glossary(words, glossary):
+    """Each glossary match becomes one entry spanning the words it replaces (it may hold a
+    space, e.g. "Mantova Dev"), keeping their trailing punctuation."""
+    normed = [norm_word(w["w"]) for w in words]
+    out, i = [], 0
+    while i < len(words):
+        hit = next(((len(wrong), right) for wrong, right in glossary if normed[i:i + len(wrong)] == wrong), None)
+        if hit is None:
+            out.append(words[i])
+            i += 1
+            continue
+        k, right = hit
+        tail = re.search(r"[^\w']*$", words[i + k - 1]["w"]).group()
+        out.append({"w": right + tail, "s": words[i]["s"], "e": words[i + k - 1]["e"]})
+        i += k
+    return out
+
+
+def align_clip(base: Path, model: Path, glossary):
+    """Transcribe the cut clip on its own (DTW word starts) into <base>.words.tsv."""
     wav = Path(str(base) + ".align.wav")
-    raw_prefix = Path(str(base) + ".align")
-    proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(clip),
-                "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
-    if proc.returncode != 0:
-        fail("ffmpeg failed extracting the clip audio")
-
-    # No VAD on purpose: with VAD, token times lose the removed silence. DTW needs
-    # flash attention off.
-    proc = run(["whisper-cli", "-m", str(model), "-l", language, "-ojf",
-                "-dtw", dtw_preset(model), "-nfa", "-of", str(raw_prefix), "-f", str(wav)],
-               capture_output=True, text=True)
-    raw_json = Path(str(raw_prefix) + ".json")
-    if proc.returncode != 0 or not raw_json.is_file():
-        fail(f"whisper-cli failed: {proc.stderr.strip()[-400:]}")
-
-    words = words_from_raw(json.loads(raw_json.read_text(encoding="utf-8")))
-    if not words:
-        fail("whisper-cli returned no words for this clip")
-    lines = [f"{w['s']:.2f}\t{w['e']:.2f}\t{w['w']}" for w in words]
-    words_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    if wav.exists():
-        wav.unlink()
-    print(f"Wrote {words_path} ({len(words)} words). Review and edit it, then run: clips.py burn "
-          f"--event {event} --ids {clip_id}")
+    run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(base.with_suffix(".mp4")),
+         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
+    words = apply_glossary(dtw_words(model, wav, Path(str(base) + ".align")), glossary)
+    wav.unlink()
+    words_path = Path(str(base) + ".words.tsv")
+    words_path.write_text("".join(f"{w['s']:.2f}\t{w['e']:.2f}\t{w['w']}\n" for w in words), encoding="utf-8")
+    print(f"Wrote {words_path}")
 
 
-def cmd_align(args, root: Path, work_dir: Path):
-    model = Path(args.model) if args.model else root / "clips" / "models" / "ggml-large-v3-turbo.bin"
-    ids = _resolve_ids_default_chosen(args, work_dir)
-    for clip_id in ids:
-        _align_one(root, work_dir, args.event, clip_id, model, args.language, args.force)
-
-
-def _resolve_ids_default_chosen(args, work_dir):
+def clip_ids(args, work_dir):
+    """--ids, else every chosen candidate."""
     if args.ids:
         return sorted(parse_ids(args.ids))
-    highlights_path = work_dir / "highlights.json"
-    if not highlights_path.is_file():
-        fail(f"{highlights_path} not found and --ids was not given.")
-    highlights = load_json(highlights_path, "highlights.json")
-    validate_highlights(highlights, highlights_path)
-    ids = sorted(c["id"] for c in highlights["candidates"] if c.get("chosen"))
-    if not ids:
-        fail("no chosen candidates and no --ids given")
-    return ids
+    return sorted(c["id"] for c in load_json(work_dir / "highlights.json")["candidates"] if c.get("chosen"))
 
 
 def read_words(path: Path):
-    words = []
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3:
-            fail(f"{path}:{n}: expected start<TAB>end<TAB>word, got: {line!r}")
-        try:
-            start, end = float(parts[0]), float(parts[1])
-        except ValueError:
-            fail(f"{path}:{n}: start and end must be numbers, got: {line!r}")
-        if end <= start:
-            fail(f"{path}:{n}: end must be after start, got: {line!r}")
-        words.append({"w": parts[2].strip(), "s": start, "e": end})
-    for i in range(1, len(words)):
-        if words[i]["s"] < words[i - 1]["s"]:
-            fail(f"{path}: word starts must not go backwards ('{words[i]['w']}' at {words[i]['s']})")
-    if not words:
-        fail(f"{path} has no words")
-    return words
+    """The words file: start<TAB>end<TAB>word per line."""
+    rows = [line.split("\t") for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [{"s": float(start), "e": float(end), "w": word.strip()} for start, end, word in rows]
 
 
 # ------------------------------------------------------------------ tighten
@@ -1350,7 +999,7 @@ def merge_quiet_runs(intervals, max_blip: float):
 def plan_pauses(words, quiet_runs, duration, fps, video_start):
     """One cut per pause worth shortening, on the clip's video frame grid. The audio says
     where a pause is, the words only say how much of it to keep: more after a sentence end.
-    Quiet runs touching the clip edges are left alone, those belong to snap and choose."""
+    Quiet runs touching the clip edges are left alone, those belong to preview and choose."""
     cuts = []
     for run_ in quiet_runs:
         start, end = run_["start"], run_["end"]
@@ -1372,17 +1021,14 @@ def plan_pauses(words, quiet_runs, duration, fps, video_start):
             "start": round(video_start + a / fps, 3), "end": round(video_start + b / fps, 3),
             "reason": "pause", "pause": round(end - start, 3),
             "after": after, "after_word": words[after]["w"] if after is not None else "",
-            "apply": True,
         })
     return cuts
 
 
 def find_words(words, phrase: str, start: int = 0):
     """Indices where the phrase begins in the words list, and its length in words."""
-    def norm(word):
-        return re.sub(r"[^\w']+", "", word.lower())
-    target = [norm(w) for w in phrase.split() if norm(w)]
-    normed = [norm(w["w"]) for w in words]
+    target = [norm_word(w) for w in phrase.split() if norm_word(w)]
+    normed = [norm_word(w["w"]) for w in words]
     hits = [i for i in range(start, len(words) - len(target) + 1)
             if target and normed[i:i + len(target)] == target]
     return hits, len(target)
@@ -1447,7 +1093,6 @@ def plan_drop(words, quiet_levels, fps, video_start, spec: str, clip_id):
         "reason": "drop", "from_index": i, "to_index": j,
         "text": " ".join(shown) if len(shown) <= 8 else " ".join(shown[:4] + ["..."] + shown[-4:]),
         "after": i - 1, "after_word": words[i - 1]["w"],
-        "apply": True,
     }
 
 
@@ -1455,7 +1100,7 @@ def dropped_words(cuts):
     """Indices of the words that applied drops remove."""
     gone = set()
     for cut in cuts:
-        if cut["reason"] == "drop" and cut.get("apply", True):
+        if cut["reason"] == "drop":
             gone.update(range(cut["from_index"], cut["to_index"] + 1))
     return gone
 
@@ -1463,7 +1108,7 @@ def dropped_words(cuts):
 def keep_ranges(cuts, frames: int):
     """Frame ranges [a, b) that survive the applied cuts, in order."""
     keeps, pos = [], 0
-    for cut in sorted((c for c in cuts if c.get("apply", True)), key=lambda c: c["start_frame"]):
+    for cut in sorted(cuts, key=lambda c: c["start_frame"]):
         a, b = max(cut["start_frame"], pos), min(cut["end_frame"], frames)
         if b <= a:
             continue
@@ -1528,25 +1173,20 @@ def tighten_graph(keeps, fps, video_start) -> str:
 def print_tighten_report(clip_id, words, plan, keeps):
     fps = plan["fps"]
     duration = plan["frames"] / fps
-    applied = [c for c in plan["cuts"] if c.get("apply", True)]
     tight = sum(b - a for a, b in keeps) / fps
     removed = duration - tight
     print(f"Clip {clip_id}: {duration:.1f} s -> {tight:.1f} s "
-          f"({removed:.1f} s out, {100 * removed / duration:.0f}%), "
-          f"{len(applied)} of {len(plan['cuts'])} cuts applied")
+          f"({removed:.1f} s out, {100 * removed / duration:.0f}%), {len(plan['cuts'])} cuts")
     for n, cut in enumerate(plan["cuts"], 1):
         length = cut["end"] - cut["start"]
-        if not cut.get("apply", True):
-            state = "kept as it is"
-        elif cut["reason"] == "drop":
+        if cut["reason"] == "drop":
             state = f"dropped \"{cut['text']}\", {length:.1f} s out"
         else:
             state = f"pause {cut['pause']:.2f} s -> {cut['pause'] - length:.2f} s"
         print(f"  [{n}] {clock(cut['start'])} after \"{cut['after_word']}\": {state}")
     marks = {}
     for n, cut in enumerate(plan["cuts"], 1):
-        if cut.get("apply", True):
-            marks.setdefault(cut["after"], []).append(f"[{n}]")
+        marks.setdefault(cut["after"], []).append(f"[{n}]")
     gone = dropped_words(plan["cuts"])
     text = " ".join(marks.get(None, []))
     for i, word in enumerate(words):
@@ -1557,78 +1197,42 @@ def print_tighten_report(clip_id, words, plan, keeps):
         print(f"  warning: still over {TOO_LONG_S:.0f} s. Drop more, or move the clip's start or end with choose.")
 
 
-def _tighten_one(work_dir, event, clip_id, args):
-    final, base = clip_paths(work_dir, clip_id)
-    clip = base.with_suffix(".mp4")
-    words_path = Path(str(base) + ".words.tsv")
-    plan_path = Path(str(base) + ".tighten.json")
-    graph_name = f"clip_{clip_id}.tighten.graph"
-    out_name = f"clip_{clip_id}.tight.mp4"
-    if not clip.is_file():
-        fail(f"{clip} not found. Run the cut subcommand first.")
-    if not words_path.is_file():
-        fail(f"{words_path} not found. Run the align subcommand first.")
-
-    words = read_words(words_path)
-    fps, video_start, frames = ffprobe_video(clip)
-    drops = [spec for cid, spec in args.drops if cid == clip_id]
-    runs = None
-    if plan_path.is_file() and not args.replan:
-        plan = load_json(plan_path, "tighten plan")
-        if plan.get("frames") != frames or plan.get("words", len(words)) != len(words):
-            fail(f"{plan_path} was made for a different cut or words file of this clip (use --replan)")
-        print(f"Using {plan_path} as it is, hand edits included (--replan recomputes it).")
-    else:
-        runs = merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S), TIGHT_MERGE_S)
-        plan = {
-            "fps": fps, "video_start": video_start, "frames": frames, "words": len(words),
-            "cuts": plan_pauses(words, runs, ffprobe_duration(clip), fps, video_start),
-        }
-    if drops:
+def cmd_tighten(args, root: Path, work_dir: Path):
+    """Plan the cuts (long pauses shortened, --drop stretches removed) from scratch, write
+    the plan and render the tightened clip, without captions."""
+    drops = id_pairs(args.drop)
+    for clip_id in clip_ids(args, work_dir):
+        final, base = clip_paths(work_dir, clip_id)
+        clip = base.with_suffix(".mp4")
+        words = read_words(Path(str(base) + ".words.tsv"))
+        fps, video_start, frames = ffprobe_video(clip)
         levels = [merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S, noise), TIGHT_MERGE_S)
                   for noise in (SILENCE_NOISE,) + DROP_NOISE_LADDER]
-    for spec in drops:
-        drop = plan_drop(words, levels, fps, video_start, spec, clip_id)
-        # The drop takes over any cut it overlaps, such as a pause inside the dropped stretch.
-        plan["cuts"] = sorted(
-            [c for c in plan["cuts"]
-             if c["end_frame"] <= drop["start_frame"] or c["start_frame"] >= drop["end_frame"]] + [drop],
-            key=lambda c: c["start_frame"])
-    if drops or runs is not None:
-        save_json(plan_path, plan)
-        print(f"Wrote {plan_path}")
-
-    keeps = keep_ranges(plan["cuts"], frames)
-    print_tighten_report(clip_id, words, plan, keeps)
-    if len(keeps) < 2:
-        print("  nothing to tighten: burn will use the clip as it is.")
-        return
-
-    (final / graph_name).write_text(tighten_graph(keeps, fps, video_start), encoding="utf-8")
-    # One decode, one encode, run inside final/ like burn. The graph goes in a file:
-    # a long clip has dozens of pieces.
-    proc = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", clip.name,
+        cuts = plan_pauses(words, levels[0], ffprobe_duration(clip), fps, video_start)
+        for cid, spec in drops:
+            if cid != clip_id:
+                continue
+            drop = plan_drop(words, levels, fps, video_start, spec, clip_id)
+            # The drop takes over any cut it overlaps, such as a pause inside the dropped stretch.
+            cuts = sorted([c for c in cuts if c["end_frame"] <= drop["start_frame"]
+                           or c["start_frame"] >= drop["end_frame"]] + [drop], key=lambda c: c["start_frame"])
+        plan = {"fps": fps, "video_start": video_start, "frames": frames, "words": len(words), "cuts": cuts}
+        save_json(Path(str(base) + ".tighten.json"), plan)
+        keeps = keep_ranges(cuts, frames)
+        print_tighten_report(clip_id, words, plan, keeps)
+        if len(keeps) < 2:
+            print("  nothing to tighten: burn will use the clip as it is.")
+            continue
+        graph_name, out_name = f"clip_{clip_id}.tighten.graph", f"clip_{clip_id}.tight.mp4"
+        (final / graph_name).write_text(tighten_graph(keeps, fps, video_start), encoding="utf-8")
+        # One decode, one encode, run inside final/ like burn. The graph goes in a file:
+        # a long clip has dozens of pieces.
+        if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", clip.name,
                 "-/filter_complex", graph_name, "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_name], cwd=final)
-    if proc.returncode != 0:
-        fail(f"ffmpeg failed tightening clip {clip_id}")
-    print(f"Wrote {final / out_name}. Watch it, then run: clips.py burn --event {event} --ids {clip_id}")
-
-
-def cmd_tighten(args, root: Path, work_dir: Path):
-    args.drops = []
-    for pair in args.drop or []:
-        id_str, sep, spec = pair.partition("=")
-        if not sep or not id_str.strip().isdigit() or not spec.strip():
-            fail(f"invalid --drop (expected ID=first words{DROP_SEP}last words): {pair}")
-        args.drops.append((int(id_str), spec.strip()))
-    ids = _resolve_ids_default_chosen(args, work_dir)
-    stray = sorted({cid for cid, _ in args.drops} - set(ids))
-    if stray:
-        fail(f"--drop names clip(s) {stray} that this run does not tighten (check --ids)")
-    for clip_id in ids:
-        _tighten_one(work_dir, args.event, clip_id, args)
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_name], cwd=final).returncode:
+            fail(f"ffmpeg failed tightening clip {clip_id}")
+        print(f"Wrote {final / out_name}")
 
 
 def tightened_inputs(base: Path, clip: Path, words):
@@ -1636,19 +1240,14 @@ def tightened_inputs(base: Path, clip: Path, words):
     plan_path = Path(str(base) + ".tighten.json")
     if not plan_path.is_file():
         return clip, words
-    plan = load_json(plan_path, "tighten plan")
+    plan = load_json(plan_path)
     keeps = keep_ranges(plan["cuts"], plan["frames"])
     if len(keeps) < 2:
         return clip, words
-    tight = Path(str(base) + ".tight.mp4")
-    expected = sum(b - a for a, b in keeps) / plan["fps"]
-    if not tight.is_file() or abs(ffprobe_duration(tight) - expected) > 0.1:
-        fail(f"{tight} is missing or older than {plan_path}. Run the tighten subcommand again, "
-             f"or pass --no-tighten.")
-    if plan.get("words", len(words)) != len(words):
-        fail(f"{base}.words.tsv no longer has the word count {plan_path} was made for. "
-             f"Run tighten --replan (and give the drops again).")
-    return tight, remap_words(words, keeps, plan["fps"], plan["video_start"], dropped_words(plan["cuts"]))
+    if plan["words"] != len(words):
+        fail("the words file gained or lost a line since tighten: run tighten again (with the drops)")
+    return (Path(str(base) + ".tight.mp4"),
+            remap_words(words, keeps, plan["fps"], plan["video_start"], dropped_words(plan["cuts"])))
 
 
 # ------------------------------------------------------------------ burn
@@ -1675,10 +1274,14 @@ def display(word: str, style) -> str:
     return text.upper() if style["uppercase"] else text
 
 
-def build_ass(words, style, caption_top: int, footer: str, duration: float) -> str:
-    """Captions hang from y = caption_top (below the picture); footer is static text
-    at the bottom of the canvas for the whole clip."""
-    header = f"""[Script Info]
+def ass_header(*styles) -> str:
+    """An .ass file header for the vertical canvas. Each style is (name, font, size, colour,
+    outline, shadow, alignment, margin_v). Aeonik Pro Bold is not a family of its own but
+    the bold of Aeonik Pro, so a font name ending in " Bold" sets the bold flag instead."""
+    lines = [f"Style: {name},{font.removesuffix(' Bold')},{size},{colour},{colour},&H00000000,&H80000000,"
+             f"{-1 if font.endswith(' Bold') else 0},0,0,0,100,100,0,0,1,{outline},{shadow},{align},60,60,{margin_v},1"
+             for name, font, size, colour, outline, shadow, align, margin_v in styles]
+    return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {CANVAS_W}
 PlayResY: {CANVAS_H}
@@ -1687,12 +1290,19 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{style['font']},{style['size']},{style['primary']},{style['primary']},{style['outline_colour']},&H80000000,0,0,0,0,100,100,0,0,1,{style['outline']},{style['shadow']},8,60,60,{int(caption_top)},1
-Style: Footer,{style['footer_font']},{style['footer_size']},{style['active']},{style['active']},{style['outline_colour']},&H80000000,0,0,0,0,100,100,0,0,1,0,0,2,60,60,{style['footer_margin_v']},1
+{chr(10).join(lines)}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+
+
+def build_ass(words, style, caption_top: int, footer: str, duration: float) -> str:
+    """Captions hang from y = caption_top (below the picture); footer is static text
+    at the bottom of the canvas for the whole clip."""
+    header = ass_header(
+        ("Cap", style["font"], style["size"], style["primary"], style["outline"], style["shadow"], 8, int(caption_top)),
+        ("Footer", style["footer_font"], style["footer_size"], style["active"], 0, 0, 2, style["footer_margin_v"]))
     active = "{\\c%s\\fscx%d\\fscy%d}" % (style["active"], style["active_scale"], style["active_scale"])
     events = []
     if footer:
@@ -1718,54 +1328,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def clip_crops(highlights_path: Path, given_crop, ids):
+def clip_crops(work_dir: Path, given, ids):
     """{clip id: crop or None}. A crop belongs to a clip, because the speaker and the
     camera can move between clips: --crop is stored on every candidate this run burns
     ("none" clears it) and later burns of that clip reuse it. No crop shows the whole frame."""
-    if given_crop and given_crop != "none" and not re.match(r"^\d+:\d+:\d+:\d+$", given_crop):
-        fail(f"--crop must be W:H:X:Y in source pixels, or none, got: {given_crop}")
-    new_crop = None if given_crop == "none" else given_crop
-    if not highlights_path.is_file():
-        return {i: new_crop for i in ids}  # nowhere to remember it
-    highlights = load_json(highlights_path, "highlights.json")
-    cands = {c["id"]: c for c in highlights["candidates"] if c["id"] in ids}
-    if given_crop:
-        for cand in cands.values():
-            cand.pop("crop", None)
-            if new_crop:
-                cand["crop"] = new_crop
-        save_json(highlights_path, highlights)
-    return {i: cands[i].get("crop") if i in cands else new_crop for i in ids}
+    highlights = load_json(work_dir / "highlights.json")
+    cands = {c["id"]: c for c in highlights["candidates"]}
+    if given:
+        for i in ids:
+            cands[i].pop("crop", None)
+            if given != "none":
+                cands[i]["crop"] = given
+        save_json(work_dir / "highlights.json", highlights)
+    return {i: cands[i].get("crop") for i in ids}
 
 
-def _burn_one(root, work_dir, clip_id, args, crop):
+def _burn_one(root, work_dir, clip_id, crop):
     final, base = clip_paths(work_dir, clip_id)
-    clip = base.with_suffix(".mp4")
-    words_path = Path(str(base) + ".words.tsv")
-    if not clip.is_file():
-        fail(f"{clip} not found. Run the cut subcommand first.")
-    if not words_path.is_file():
-        fail(f"{words_path} not found. Run the align subcommand first.")
-
-    style = dict(DEFAULT_STYLE)
-    for key in ("font", "size", "active"):
-        value = getattr(args, key)
-        if value is not None:
-            style[key] = value
-    style["uppercase"] = not args.keep_case
-
-    words = read_words(words_path)
-    if not args.no_tighten:
-        clip, words = tightened_inputs(base, clip, words)
+    clip, words = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
+    style = DEFAULT_STYLE
     width, height = ffprobe_size(clip)
     encode = ["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
-              "-c:a", "copy", "-movflags", "+faststart"]
+              "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
 
     # Vertical 1080x1920: brand background, logo on top, the (optionally cropped) picture
     # at full width, captions in the free space below it, link at the bottom.
     logo = root / "clips" / "config" / "brand" / "logo-dark-bg.png"
-    if not logo.is_file():
-        fail(f"brand logo not found: {logo}")
     crop_filter = "null"
     if crop:
         crop_filter = f"crop={crop}"
@@ -1776,11 +1364,11 @@ def _burn_one(root, work_dir, clip_id, args, crop):
     out_name = f"clip_{clip_id}.final.mp4"
     duration = ffprobe_duration(clip)
     if duration > TOO_LONG_S:
-        # snap lets a cut run to RAW_TOO_LONG_S on the promise that tighten shortens it
+        # preview lets a cut run to RAW_TOO_LONG_S on the promise that tighten shortens it
         print(f"warning: clip {clip_id} is {duration:.0f} s, over {TOO_LONG_S:.0f} s. Drop stretches with tighten first.")
     (final / ass_name).write_text(
         build_ass(words, style, caption_top=video_y + video_h + 120,
-                  footer=args.footer, duration=duration),
+                  footer=FOOTER, duration=duration),
         encoding="utf-8-sig")
     graph = (
         f"[0:v]{crop_filter},scale={CANVAS_W}:{video_h}[v];"
@@ -1788,10 +1376,11 @@ def _burn_one(root, work_dir, clip_id, args, crop):
         f"[1:v]scale={LOGO_W}:-1[lg];"
         f"[bg][v]overlay=0:{video_y}:shortest=1[a];"
         f"[a][lg]overlay=(W-w)/2:{LOGO_Y}[b];"
-        f"[b]ass={ass_name}[out]"
+        f"[b]ass={ass_name}[out];"
+        f"[0:a]{loudnorm_filter(clip)}[au]"
     )
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip.name, "-i", str(logo),
-           "-filter_complex", graph, "-map", "[out]", "-map", "0:a?"] + encode + [out_name]
+           "-filter_complex", graph, "-map", "[out]", "-map", "[au]"] + encode + [out_name]
 
     # Run inside final/ so the ass filter gets a bare file name (no escaping needed).
     proc = run(cmd, cwd=final)
@@ -1800,148 +1389,150 @@ def _burn_one(root, work_dir, clip_id, args, crop):
     print(f"Wrote {final / out_name}")
 
 
+def loudnorm_filter(clip: Path) -> str:
+    """Two-pass loudness normalization to LOUDNESS_TARGET, so every clip, and every piece
+    of a montage, plays equally loud: this measures the clip, the returned filter applies
+    one gain, or ffmpeg's dynamic mode where one gain would push the peaks over
+    LOUDNESS_PEAK."""
+    target = f"I={LOUDNESS_TARGET}:TP={LOUDNESS_PEAK}:LRA=11"
+    proc = run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(clip), "-vn",
+                "-af", f"loudnorm={target}:print_format=json", "-f", "null", "-"],
+               capture_output=True, text=True)
+    found = re.findall(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr)
+    if proc.returncode != 0 or not found:
+        fail(f"could not measure the loudness of {clip}")
+    got = json.loads(found[-1])
+    return (f"loudnorm={target}:measured_I={got['input_i']}:measured_TP={got['input_tp']}:"
+            f"measured_LRA={got['input_lra']}:measured_thresh={got['input_thresh']}:"
+            f"offset={got['target_offset']}:linear=true,aresample=48000")
+
+
 def cmd_burn(args, root: Path, work_dir: Path):
-    highlights_path = work_dir / "highlights.json"
-    ids = _resolve_ids_default_chosen(args, work_dir)
-    crops = clip_crops(highlights_path, args.crop, ids)
+    ids = clip_ids(args, work_dir)
+    crops = clip_crops(work_dir, args.crop, ids)
     for clip_id in ids:
-        _burn_one(root, work_dir, clip_id, args, crops[clip_id])
+        _burn_one(root, work_dir, clip_id, crops[clip_id])
+
+
+# ==================================================================
+# join (montage of finished clips, from one or more events)
+# ==================================================================
+
+def build_card(out_dir: Path, card, root: Path) -> Path:
+    """card.mp4: CARD_S of brand background, logo, the card's lines (the last one in the
+    accent colour), an optional subtitle and the link, with silent audio."""
+    st = DEFAULT_STYLE
+    lines = card["lines"]
+    events = [(CARD_LINES_Y + n * CARD_LINE_STEP, "Line", ("{\\c%s}" % st["active"] if n == len(lines) - 1 else "") + text)
+              for n, text in enumerate(lines)]
+    if card.get("subtitle"):
+        events.append((CARD_LINES_Y + len(lines) * CARD_LINE_STEP + 80, "Sub", card["subtitle"]))
+    events.append((CARD_LINK_Y, "Footer", card.get("link", FOOTER)))
+    ass = ass_header(("Line", st["font"], 120, st["primary"], 0, 0, 8, 0),
+                     ("Sub", "Aeonik Pro", 60, st["primary"], 0, 0, 8, 0),
+                     ("Footer", st["footer_font"], 84, st["active"], 0, 0, 8, 0))
+    ass += "".join(f"Dialogue: 0,{ass_time(0)},{ass_time(CARD_S)},{name},,0,0,0,,{{\\an8\\pos({CANVAS_W // 2},{y})}}{text}\n"
+                   for y, name, text in events)
+    (out_dir / "card.ass").write_text(ass, encoding="utf-8-sig")
+    graph = (f"color=c=0x{st['background']}:s={CANVAS_W}x{CANVAS_H}:r={MONTAGE_FPS}:d={CARD_S}[bg];"
+             f"[0:v]scale={CARD_LOGO_W}:-1[lg];[bg][lg]overlay=(W-w)/2:{CARD_LOGO_Y}[b];"
+             f"[b]ass=card.ass,fade=t=in:d={CARD_FADE}[v]")
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(root / "clips" / "config" / "brand" / "logo-dark-bg.png"),
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", graph,
+            "-map", "[v]", "-map", "1:a", "-t", str(CARD_S), "-c:v", "libx264", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "card.mp4"], cwd=out_dir).returncode:
+        fail("ffmpeg failed drawing the end card")
+    return out_dir / "card.mp4"
+
+
+def cmd_join(args, root: Path, work_dir):
+    """Join finished clips (burned, so already equally loud) and an optional end card into
+    clips/work/<slug>/<slug>.mp4, as listed in clips/work/<slug>/montage.json:
+    {"pieces": ["YYYY-MM-DD:id", ...], "card": {"lines": [...], "subtitle": "...", "link": "..."}}"""
+    out_dir = root / "clips" / "work" / args.montage
+    montage = load_json(out_dir / "montage.json")
+    inputs = [work_dir_for(root, event) / "final" / f"clip_{cid}.final.mp4"
+              for event, _, cid in (piece.partition(":") for piece in montage["pieces"])]
+    if montage.get("card"):
+        inputs.append(build_card(out_dir, montage["card"], root))
+    # Plain cuts: one frame rate, and a few milliseconds of audio fade each side of a join
+    # so it does not click.
+    graph = ""
+    for n, clip in enumerate(inputs):
+        fade_out = ffprobe_duration(clip) - JOIN_FADE_OUT
+        graph += (f"[{n}:v]fps={MONTAGE_FPS},setsar=1[v{n}];[{n}:a]aresample=48000,afade=t=in:d={JOIN_FADE_IN},"
+                  f"afade=t=out:st={fade_out:.3f}:d={JOIN_FADE_OUT}[a{n}];")
+    graph += "".join(f"[v{n}][a{n}]" for n in range(len(inputs))) + f"concat=n={len(inputs)}:v=1:a=1[v][a]"
+    out = out_dir / f"{args.montage}.mp4"
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *[a for c in inputs for a in ("-i", str(c))],
+            "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out)]).returncode:
+        fail("ffmpeg failed joining the montage")
+    print(f"Wrote {out} ({ffprobe_duration(out):.1f}s)")
 
 
 # ==================================================================
 # argument parsing
 # ==================================================================
 
-def add_common(p):
-    p.add_argument("--event", required=True, help="Event date, YYYY-MM-DD.")
-    p.add_argument("--work-dir", help=argparse.SUPPRESS)  # hidden testing override for clips/work/<event>
-
-
 def build_parser():
-    parser = argparse.ArgumentParser(
-        prog="clips.py",
-        description="Mantova Dev clipping pipeline, one command-line tool.",
-    )
+    parser = argparse.ArgumentParser(prog="clips.py", description="Mantova Dev clipping pipeline.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("ingest", help="Normalize a source recording into source.mp4 + audio.wav.")
-    add_common(p)
-    p.add_argument("--source", required=True, help="Path to the source recording (mp4, mkv, mov).")
-    p.add_argument("--audio-track", default="0", help="0-based index among audio streams to extract (default: 0).")
-    p.add_argument("--force", action="store_true", help="Overwrite existing outputs if present.")
-    p.set_defaults(func=cmd_ingest)
+    def command(name, func, help_text, ids=None):
+        p = sub.add_parser(name, help=help_text)
+        p.set_defaults(func=func)
+        if name != "join":
+            p.add_argument("--event", required=True, help="Event date, YYYY-MM-DD.")
+            p.add_argument("--work-dir", help=argparse.SUPPRESS)  # testing override for clips/work/<event>
+        if ids:
+            p.add_argument("--ids", help=ids)
+        return p
 
-    p = sub.add_parser("transcribe", help="Run whisper.cpp and derive a compact transcript.json.")
-    add_common(p)
-    p.add_argument("--model", default=None, help="Whisper ggml model (default: clips/models/ggml-large-v3-turbo.bin).")
-    p.add_argument("--vad-model", default=None, help="Silero VAD ggml model (default: clips/models/ggml-silero-v5.1.2.bin).")
-    p.add_argument("--language", default="it", help="Whisper language code (default: it).")
-    p.add_argument("--threads", type=int, help="Number of CPU threads to pass to whisper-cli.")
-    p.add_argument("--no-vad", action="store_true", help="Run without VAD (skips the VAD model requirement).")
-    p.add_argument("--force", action="store_true", help="Overwrite existing outputs if present.")
-    p.add_argument("--compact-only", action="store_true",
-                   help="Skip whisper-cli and rebuild transcript.json from the existing transcript.raw.json.")
-    p.set_defaults(func=cmd_transcribe)
-
-    p = sub.add_parser("render", help="Print transcript.json as numbered, mm:ss-stamped lines.")
-    add_common(p)
-    p.set_defaults(func=cmd_render)
-
-    p = sub.add_parser("snap", help="Compute cut points for all candidates in highlights.json.")
-    add_common(p)
-    p.add_argument("--refresh-silence", action="store_true", help="Ignore the cached silences.json and re-run silencedetect.")
-    p.set_defaults(func=cmd_snap)
-
-    p = sub.add_parser("preview", help="Render a captioned, padded review file per candidate.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids (default: all).")
-    p.add_argument("--pad", type=float, default=PREVIEW_PAD, help=f"Seconds of padding before and after the cut (default: {PREVIEW_PAD}).")
-    p.set_defaults(func=cmd_preview)
-
-    p = sub.add_parser("choose", help="Mark candidates as chosen and optionally adjust their cut points.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids to mark chosen, e.g. 2. The others keep their "
-                                 "state, so clips can be chosen one at a time.")
-    p.add_argument("--unchoose", metavar="IDS", help="Comma-separated candidate ids to mark as not chosen.")
-    p.add_argument("--start", action="append", metavar="ID=TIME",
-                   help="Set a candidate's cut start from a time read off its preview file (seconds or M:SS). "
-                        "Needs a rendered preview. Repeatable.")
-    p.add_argument("--end", action="append", metavar="ID=TIME",
-                   help="Set a candidate's cut end from a time read off its preview file (seconds or M:SS). "
-                        "Needs a rendered preview. Repeatable.")
-    p.add_argument("--start-at", action="append", metavar="ID=WORDS",
-                   help="Start the clip at these words, quoted from the transcript, e.g. 2=\"mi sono dimenticato\". "
-                        "Lands on a nearby pause when there is one. Repeatable.")
-    p.add_argument("--end-after", action="append", metavar="ID=WORDS",
-                   help="End the clip right after these words, e.g. 2=\"mila euro\". Repeatable.")
-    p.add_argument("--reset", action="append", metavar="ID",
-                   help="Return a candidate's cut to its snapped edges, dropping any manual adjustment. Repeatable.")
-    p.set_defaults(func=cmd_choose)
-
-    p = sub.add_parser("status", help="Print one block per candidate: id, score, chosen, range, flags, hook, preview.")
-    add_common(p)
-    p.set_defaults(func=cmd_status)
-
-    p = sub.add_parser("cut", help="Cut every chosen candidate from source.mp4 into final/clip_<id>.mp4.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
-    p.add_argument("--force", action="store_true", help="Overwrite existing clips.")
-    p.set_defaults(func=cmd_cut)
-
-    p = sub.add_parser("align", help="Transcribe cut clip(s) on their own and write an editable words.tsv.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
-    p.add_argument("--model", help="Whisper ggml model (default: clips/models/ggml-large-v3-turbo.bin).")
-    p.add_argument("--language", default="it")
-    p.add_argument("--force", action="store_true", help="Overwrite an existing words file (loses edits).")
-    p.set_defaults(func=cmd_align)
-
-    p = sub.add_parser("tighten", help="Shorten the pauses inside cut clip(s): writes a plan and final/clip_<id>.tight.mp4.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
+    chosen = "Comma-separated candidate ids (default: every chosen candidate)."
+    p = command("ingest", cmd_ingest, "Link or remux the recording to source.mp4 and extract audio.wav.")
+    p.add_argument("--source", required=True, help="Path to the recording (mp4, mkv, mov).")
+    p.add_argument("--audio-track", default="0", help="0-based index among the audio streams (default: 0).")
+    p = command("transcribe", cmd_transcribe, "Run whisper.cpp and derive transcript.json.")
+    p.add_argument("--compact-only", action="store_true", help="Rebuild transcript.json from transcript.raw.json.")
+    command("render", cmd_render, "Print the transcript as `[i] mm:ss text` lines ([i]~: likely invented).")
+    p = command("preview", cmd_preview, "Place the cut of new or re-spanned candidates and render their previews.",
+                ids="Also render these candidates' previews again.")
+    p.add_argument("--pad", type=float, default=PREVIEW_PAD, help="Seconds shown before and after the cut.")
+    p = command("choose", cmd_choose, "Mark candidates chosen and move their cut edges.",
+                ids="Candidate ids to mark chosen.")
+    p.add_argument("--unchoose", metavar="IDS", help="Candidate ids to mark not chosen.")
+    for flag, what in (("--start", "start"), ("--end", "end")):
+        p.add_argument(flag, action="append", metavar="ID=TIME", help=f"Move the {what} to a time read off the preview player.")
+    p.add_argument("--start-at", action="append", metavar="ID=WORDS", help="Start the clip at these words from the transcript.")
+    p.add_argument("--end-after", action="append", metavar="ID=WORDS", help="End the clip right after these words.")
+    p.add_argument("--reset", metavar="IDS", help="Compute these candidates' cuts again.")
+    command("status", cmd_status, "Print each candidate: range, edges, preview, text.", ids="Only these candidates.")
+    p = command("cut", cmd_cut, "Cut chosen clips and align their words.tsv for the captions.", ids=chosen)
+    p.add_argument("--force", action="store_true", help="Overwrite an existing clip and its words file.")
+    p = command("tighten", cmd_tighten, "Shorten long pauses and drop stretches: final/clip_<id>.tight.mp4.", ids=chosen)
     p.add_argument("--drop", action="append", metavar="ID=WORDS",
-                   help="Remove a stretch of speech, quoted from the words file: "
-                        "3=\"first words ... last words\", or one phrase to drop just that. Each edge "
-                        "must land on a pause, or the drop is refused. Added to the plan. Repeatable.")
-    p.add_argument("--replan", action="store_true",
-                   help="Recompute an existing plan (loses its drops and hand edits such as \"apply\": false).")
-    p.set_defaults(func=cmd_tighten)
-
-    p = sub.add_parser("burn", help="Build the .ass from the words file and burn it into the final vertical clip.")
-    add_common(p)
-    p.add_argument("--ids", help="Comma-separated candidate ids. Default: every chosen candidate.")
-    p.add_argument("--font", help=f"Font family (default: {DEFAULT_STYLE['font']}).")
-    p.add_argument("--size", type=int, help=f"Caption font size (default: {DEFAULT_STYLE['size']}).")
-    p.add_argument("--active", help=f"Highlight colour as ASS &HAABBGGRR (default: {DEFAULT_STYLE['active']}).")
-    p.add_argument("--keep-case", action="store_true", help="Keep the words as written instead of showing them in upper case.")
-    p.add_argument("--crop", metavar="W:H:X:Y",
-                   help="Crop the source picture first (source pixels), e.g. 1440:1080:0:0, so the content "
-                        "shows bigger. Stored on each clip this run burns and reused by its later burns; "
-                        "\"none\" clears it. Without a crop the whole frame is shown.")
-    p.add_argument("--footer", default="https://mantova.dev", help="Text at the bottom of the canvas (default: https://mantova.dev).")
-    p.add_argument("--no-tighten", action="store_true", help="Burn the clip as cut, even if tighten has shortened it.")
-    p.set_defaults(func=cmd_burn)
-
+                   help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\".")
+    p = command("burn", cmd_burn, "Render the final vertical clip with captions.", ids=chosen)
+    p.add_argument("--crop", metavar="W:H:X:Y", help="Show only this part of the picture (stored; \"none\" clears it).")
+    p = command("join", cmd_join, "Join finished clips and an end card as listed in clips/work/<slug>/montage.json.")
+    p.add_argument("--montage", required=True, metavar="SLUG", help="Montage name, e.g. chi-siamo.")
     return parser
 
 
 def main(argv=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    validate_event(args.event)
-
+    args = build_parser().parse_args(argv)
     root = repo_root()
-    work_dir = work_dir_for(root, args.event, getattr(args, "work_dir", None))
-
-    if args.command == "transcribe":
-        if args.model is None:
-            args.model = str(root / "clips" / "models" / "ggml-large-v3-turbo.bin")
-        if args.vad_model is None:
-            args.vad_model = str(root / "clips" / "models" / "ggml-silero-v5.1.2.bin")
-
-    args.func(args, root, work_dir)
-
+    work_dir = work_dir_for(root, args.event, args.work_dir) if hasattr(args, "event") else None
+    try:
+        args.func(args, root, work_dir)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # the reader went away (render | head): stop quietly
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
