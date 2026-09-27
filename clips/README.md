@@ -15,7 +15,7 @@ One tool, `clips/clips.py`, and one skill per step. An agent reads the skill's
 | 1 | `skills/ingest` | `ingest` | which file, which audio track |
 | 2 | `skills/transcript-extract` | `transcribe`, `render` | nothing (agent sanity-checks the text) |
 | 3 | `skills/highlight-selection` | `preview`, `choose`, `status` | which moment to work on, whether to keep it, where it starts and ends |
-| 4 | `skills/produce-clip` | `cut`, `tighten`, `burn`, `join` | caption fixes, what to drop, final approval, post text |
+| 4 | `skills/produce-clip` | `cut`, `tighten`, `burn`, `cover`, `join` | caption fixes, what to drop, final approval, cover, post text |
 
 To start, tell the agent something like: "make clips from `/path/to/recording.mp4`
 for event <YYYY-MM-DD>, follow `clips/README.md`". Every command but `join` takes
@@ -57,9 +57,9 @@ brew install ffmpeg-full whisper-cpp
   `clips/work/<slug>/<slug>.mp4`.
 - `clips/models/`: Whisper models. Gitignored.
 - `events/`: never written by the pipeline.
-- Delivery: the human keeps approved videos outside the repo, named
-  `YYYYMMDD-mantovadev-<slug>.mp4` (the date it was made) with the post text next to
-  it in `YYYYMMDD-mantovadev-<slug>.txt`, e.g. in `~/Movies/MD`.
+- Delivery: each approved post goes outside the repo in its own folder,
+  `YYYYMMDD-mantovadev-<slug>/` (the date it was made) with `video.mp4`, `cover.png`
+  and `post.txt`, e.g. in `~/Movies/MD`.
 
 ## Recording checklist (for whoever streams the event)
 

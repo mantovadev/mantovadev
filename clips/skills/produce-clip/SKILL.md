@@ -15,8 +15,12 @@ It also joins finished clips into a montage.
    pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
 3. `burn`: the 1080x1920 clip in the Mantova Dev look (brand background, logo, the
    picture at full width, word-by-word captions, `https://mantova.dev` at the bottom),
-   brought to a common loudness (-14 LUFS).
-4. `join` (montages only): finished clips from any events plus an end card.
+   brought to a common loudness (-14 LUFS). Everything stays clear of the TikTok and
+   Shorts UI (top ~230 px, bottom ~345 px, action buttons on the right).
+4. `cover`: a 1080x1920 still to upload as the post's cover (Instagram, TikTok,
+   YouTube Studio): logo, a frame of the clip and a large title, kept inside the 3:4
+   and 4:5 crops of profile grids and feeds.
+5. `join` (montages only): finished clips from any events plus an end card.
 
 Pass `--ids <id>` on every command: without it a command acts on every chosen
 candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
@@ -38,9 +42,10 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    (`ffmpeg -ss 10 -i clips/work/<event>/final/clip_<id>.mp4 -frames:v 1
    clips/work/<event>/final/clip_<id>.jpg`). The picture always fills the canvas
    width, so cutting dead space off the sides makes speaker and slides bigger. Crop
-   when nothing the clip needs falls outside; keep the rectangle at least as wide as it
-   is tall. Other clips of the event show earlier crops (`crop` in `highlights.json`):
-   reuse one if the camera did not move.
+   when nothing the clip needs falls outside; keep the rectangle's height at most 0.85
+   of its width (920 px on the canvas), or `burn` refuses it. Other clips of the event
+   show earlier crops (`crop` in `highlights.json`): reuse one if the camera did not
+   move.
 
 3. Read the words file and fix what whisper mis-heard: jargon, acronyms ("cp" is
    "CPU"), flags. Edit the word, keep the times. A name it keeps getting wrong goes in
@@ -79,11 +84,48 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    says and what `events/<event>/README.md` holds. A title of at most 60 characters,
    a caption of 2 or 3 short sentences ending with an invitation to the next meetup and
    `https://mantova.dev`, 5 to 8 hashtags (`#MantovaDev` `#Mantova` plus topic ones).
-   Name the speaker only if the event README does. Nothing dated. When approved, and
-   if the human asks, save video and text outside the repo as
-   `YYYYMMDD-mantovadev-<slug>.mp4` and `.txt` (e.g. in `~/Movies/MD`).
+   Name the speaker only if the event README does. Nothing dated.
 
-8. Ask whether they want another clip; if so, back to `highlight-selection`.
+8. Cover. Propose a cover title with the post text: 1 to 3 short lines (at most 12
+   characters each), a question or a hook, not the post title verbatim. Then pick a
+   frame: the speaker still (no motion blur), facing the room, ideally with a slide
+   that matches the title. A contact sheet helps the human choose:
+
+   ```
+   ffmpeg -i clips/work/<event>/final/clip_<id>.final.mp4 -vf "fps=1/1.5,scale=384:-2,tile=5x4" -frames:v 1 clips/work/<event>/final/clip_<id>.frames.png
+   ```
+
+   ```
+   clips/clips.py cover --event <event> --ids <id> --at <seconds> --title "Mantova Dev" --title "Chi siamo?" [--accent 1]
+   ```
+
+   Tile n of the sheet (from 0, row by row) is at n × 1.5 s. `--at` is in the final
+   clip's time, as its player shows it; `--accent` is the line in turquoise
+   (default the last). Open `clip_<id>.cover.png` and iterate until approved. For a
+   montage, draw it from one of its pieces.
+
+9. Save the post outside the repo, in a folder of its own: ask where (default
+   `~/Movies/MD`) and ask before replacing an existing folder.
+
+   ```
+   YYYYMMDD-mantovadev-<slug>/   # today's date
+     video.mp4                   # clip_<id>.final.mp4, or the montage
+     cover.png                   # clip_<id>.cover.png
+     post.txt                    # the approved text, as below
+   ```
+
+   ```
+   TITOLO
+   <title>
+
+   DIDASCALIA
+   <caption>
+
+   HASHTAG
+   <hashtags>
+   ```
+
+10. Ask whether they want another clip; if so, back to `highlight-selection`.
 
 ## Montage
 
@@ -98,6 +140,6 @@ For a montage (e.g. "chi siamo"), finish each piece as above, then write
 ```
 
 Pieces play in order, as plain cuts, at the same loudness. The optional end card shows
-the logo, the lines (the last in turquoise), the subtitle and the link (default
+the logo, the lines (the last in turquoise, or line `"accent": n`), the subtitle and the link (default
 `https://mantova.dev`) for 3 s. The result is `clips/work/<slug>/<slug>.mp4`. Pieces
 can be short (8 to 25 s each); keep the whole under 90 s and the middle brisk.

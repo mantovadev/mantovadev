@@ -16,6 +16,7 @@ Subcommands:
   cut         cut a chosen clip and align its words for the captions
   tighten     shorten long pauses and drop stretches inside a cut clip
   burn        render the final vertical clip with captions
+  cover       draw a cover still for a finished clip
   join        join finished clips (any events) and an end card into a montage
 
 Run `clips.py <subcommand> --help` for each subcommand's options.
@@ -75,7 +76,7 @@ LAST_WORD_HOLD = 0.6     # how long the final word of a chunk stays if nothing f
 
 # burn: chunking. A chunk is what is on screen at once.
 MAX_WORDS = 3
-MAX_CHARS = 14          # upper case Aeonik Black at size 100: 15 chars fill about 80% of the width
+MAX_CHARS = 12          # upper case Aeonik Black at size 90: 12 chars end ~60 px left of the action buttons
 GAP_BREAK = 0.45        # a pause this long always starts a new chunk
 BREAK_AFTER = ".?!,;:"  # punctuation that ends a chunk
 STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
@@ -108,8 +109,13 @@ LOUDNESS_TARGET = -14
 LOUDNESS_PEAK = -1.5     # true peak ceiling, dBTP
 
 CANVAS_W, CANVAS_H = 1080, 1920   # output is always vertical
-LOGO_W = 640             # logo width and top offset on the canvas
-LOGO_Y = 150
+# Safe zone: TikTok and YouTube Shorts cover y < ~230 and y > ~1575 of the canvas with
+# their UI, the action buttons x > ~905 from y ~1010 down, and crop ~56 px off each
+# side on tall phones (measured on an iPhone). Everything drawn stays inside.
+LOGO_W = 560             # logo width and top offset on the canvas
+LOGO_Y = 250
+MAX_VIDEO_H = 920        # tallest picture that leaves room for captions and link
+CAPTION_GAP = 40         # between the picture and the captions
 FOOTER = "https://mantova.dev"   # static text at the bottom of every clip
 
 # join: montage frame rate, audio fades at each join, and the end card layout.
@@ -119,9 +125,20 @@ JOIN_FADE_OUT = 0.12
 CARD_S = 3.0
 CARD_FADE = 0.3
 CARD_LOGO_W, CARD_LOGO_Y = 760, 560
-CARD_LINES_Y = 845       # first line; each next one CARD_LINE_STEP lower
-CARD_LINE_STEP = 130
-CARD_LINK_Y = 1585
+CARD_LINES_Y = 865       # first line; each next one CARD_LINE_STEP lower
+CARD_LINE_STEP = 110
+CARD_LINK_Y = 1450
+
+# cover: a still for the platforms' cover picker. Profile grids crop a 9:16 cover to 3:4
+# and the Instagram feed to 4:5 (third-party figures, unverified), so the block (logo,
+# picture, title) is centred inside y 300..1600.
+COVER_BLOCK_H = 1260
+COVER_LOGO_GAP = 44      # logo to picture
+COVER_TITLE_GAP = 60     # picture to title
+COVER_TITLE_SIZE = 130
+COVER_LINE_STEP = 140
+COVER_MAX_LINES = 3
+COVER_MAX_CHARS = 12     # "MANTOVA DEV" at size 130 is ~910 px wide
 
 # Aeonik Pro is the Mantova Dev brand font. It is proprietary, so it is not in the repo:
 # it must be installed on the machine. If it is missing, libass silently falls back to
@@ -130,9 +147,9 @@ DEFAULT_STYLE = {
     "font": "Aeonik Pro Black",
     "footer_font": "Aeonik Pro Bold",
     "footer_size": 56,
-    "footer_margin_v": 140,
+    "footer_margin_v": 390,
     "background": "041917",      # canvas colour (brand dark), RRGGBB
-    "size": 100,                 # caption font size on the 1080x1920 canvas
+    "size": 90,                  # caption font size on the 1080x1920 canvas
     "primary": "&H00FFFFFF",     # ASS colours are &HAABBGGRR
     "active": "&H00CFE003",      # highlighted word: Mantova Dev turquoise #03E0CF
     "outline_colour": "&H00000000",
@@ -1343,6 +1360,16 @@ def clip_crops(work_dir: Path, given, ids):
     return {i: cands[i].get("crop") for i in ids}
 
 
+def picture_height(width: int, height: int) -> int:
+    """Height of a width x height picture scaled to the canvas width. A taller one than
+    MAX_VIDEO_H would push captions and link under the platforms' UI, so it is refused."""
+    video_h = int(round(CANVAS_W * height / width / 2)) * 2
+    if video_h > MAX_VIDEO_H:
+        fail(f"a {width}x{height} picture is {video_h} px tall on the canvas, over {MAX_VIDEO_H}: "
+             f"crop it to at most {width * MAX_VIDEO_H // CANVAS_W} px high at this width")
+    return video_h
+
+
 def _burn_one(root, work_dir, clip_id, crop):
     final, base = clip_paths(work_dir, clip_id)
     clip, words = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
@@ -1358,8 +1385,8 @@ def _burn_one(root, work_dir, clip_id, crop):
     if crop:
         crop_filter = f"crop={crop}"
         width, height = (int(x) for x in crop.split(":")[:2])
-    video_h = int(round(CANVAS_W * height / width / 2)) * 2
-    video_y = max(LOGO_Y + 200, (CANVAS_H - video_h) // 2 - 140)
+    video_h = picture_height(width, height)
+    video_y = max(LOGO_Y + 100, (CANVAS_H - video_h) // 2 - 140)
     ass_name = f"clip_{clip_id}.ass"
     out_name = f"clip_{clip_id}.final.mp4"
     duration = ffprobe_duration(clip)
@@ -1367,7 +1394,7 @@ def _burn_one(root, work_dir, clip_id, crop):
         # preview lets a cut run to RAW_TOO_LONG_S on the promise that tighten shortens it
         print(f"warning: clip {clip_id} is {duration:.0f} s, over {TOO_LONG_S:.0f} s. Drop stretches with tighten first.")
     (final / ass_name).write_text(
-        build_ass(words, style, caption_top=video_y + video_h + 120,
+        build_ass(words, style, caption_top=video_y + video_h + CAPTION_GAP,
                   footer=FOOTER, duration=duration),
         encoding="utf-8-sig")
     graph = (
@@ -1409,9 +1436,64 @@ def loudnorm_filter(clip: Path) -> str:
 
 def cmd_burn(args, root: Path, work_dir: Path):
     ids = clip_ids(args, work_dir)
+    if args.crop and args.crop != "none":
+        picture_height(*(int(x) for x in args.crop.split(":")[:2]))   # refuse before storing it
     crops = clip_crops(work_dir, args.crop, ids)
     for clip_id in ids:
         _burn_one(root, work_dir, clip_id, crops[clip_id])
+
+
+def cmd_cover(args, root: Path, work_dir: Path):
+    """final/clip_<id>.cover.png: logo, a frame of the clip (its stored crop, cut to fit)
+    and a title of up to COVER_MAX_LINES lines, one of them in the accent colour."""
+    lines = [line.upper() for line in args.title]
+    if not 1 <= len(lines) <= COVER_MAX_LINES:
+        fail(f"give 1 to {COVER_MAX_LINES} --title lines")
+    if any(len(line) > COVER_MAX_CHARS for line in lines):
+        fail(f"a title line over {COVER_MAX_CHARS} characters does not fit the width: split it")
+    accent = args.accent or len(lines)
+    if not 1 <= accent <= len(lines):
+        fail(f"--accent is a line number, 1 to {len(lines)}")
+    ids = parse_ids(args.ids)
+    if len(ids) != 1:
+        fail("give exactly one clip with --ids")
+    clip_id = ids.pop()
+    final, base = clip_paths(work_dir, clip_id)
+    clip, _ = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
+    if not 0 <= args.at < ffprobe_duration(clip):
+        fail(f"--at is past the end of {clip.name}")
+    crop = clip_crops(work_dir, None, [clip_id])[clip_id]
+    width, height = (int(x) for x in crop.split(":")[:2]) if crop else ffprobe_size(clip)
+
+    logo = root / "clips" / "config" / "brand" / "logo-dark-bg.png"
+    logo_w, logo_h = ffprobe_size(logo)
+    logo_h = LOGO_W * logo_h // logo_w
+    room = COVER_BLOCK_H - logo_h - COVER_LOGO_GAP - COVER_TITLE_GAP - len(lines) * COVER_LINE_STEP
+    video_h = int(round(CANVAS_W * height / width / 2)) * 2
+    picture_h = min(video_h, room // 2 * 2)
+    top = (CANVAS_H - COVER_BLOCK_H + room - picture_h) // 2
+    picture_y = top + logo_h + COVER_LOGO_GAP
+    title_y = picture_y + picture_h + COVER_TITLE_GAP
+
+    st = DEFAULT_STYLE
+    colour = "{\\c%s}" % st["active"]
+    ass = ass_header(("Title", st["font"], COVER_TITLE_SIZE, st["primary"], 0, 0, 8, 0))
+    ass += "".join(f"Dialogue: 0,{ass_time(0)},{ass_time(1)},Title,,0,0,0,,{{\\an8\\pos({CANVAS_W // 2},"
+                   f"{title_y + n * COVER_LINE_STEP})}}{colour if n + 1 == accent else ''}{line}\n"
+                   for n, line in enumerate(lines))
+    ass_name, out_name = f"clip_{clip_id}.cover.ass", f"clip_{clip_id}.cover.png"
+    (final / ass_name).write_text(ass, encoding="utf-8-sig")
+    graph = (f"[0:v]{'crop=' + crop if crop else 'null'},scale={CANVAS_W}:{video_h},"
+             f"crop={CANVAS_W}:{picture_h},setpts=PTS-STARTPTS[p];"
+             f"color=c=0x{st['background']}:s={CANVAS_W}x{CANVAS_H}:d=1[bg];"
+             f"[1:v]scale={LOGO_W}:-1[lg];"
+             f"[bg][p]overlay=0:{picture_y}:eof_action=repeat[a];"
+             f"[a][lg]overlay=(W-w)/2:{top}[b];"
+             f"[b]ass={ass_name}")
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", str(args.at), "-i", clip.name,
+            "-i", str(logo), "-filter_complex", graph, "-frames:v", "1", out_name], cwd=final).returncode:
+        fail("ffmpeg failed drawing the cover")
+    print(f"Wrote {final / out_name}")
 
 
 # ==================================================================
@@ -1419,18 +1501,20 @@ def cmd_burn(args, root: Path, work_dir: Path):
 # ==================================================================
 
 def build_card(out_dir: Path, card, root: Path) -> Path:
-    """card.mp4: CARD_S of brand background, logo, the card's lines (the last one in the
-    accent colour), an optional subtitle and the link, with silent audio."""
+    """card.mp4: CARD_S of brand background, logo, the card's lines (line "accent",
+    default the last, in the accent colour), an optional subtitle and the link, with
+    silent audio."""
     st = DEFAULT_STYLE
     lines = card["lines"]
-    events = [(CARD_LINES_Y + n * CARD_LINE_STEP, "Line", ("{\\c%s}" % st["active"] if n == len(lines) - 1 else "") + text)
+    accent = card.get("accent", len(lines))
+    events = [(CARD_LINES_Y + n * CARD_LINE_STEP, "Line", ("{\\c%s}" % st["active"] if n + 1 == accent else "") + text)
               for n, text in enumerate(lines)]
     if card.get("subtitle"):
         events.append((CARD_LINES_Y + len(lines) * CARD_LINE_STEP + 80, "Sub", card["subtitle"]))
     events.append((CARD_LINK_Y, "Footer", card.get("link", FOOTER)))
-    ass = ass_header(("Line", st["font"], 120, st["primary"], 0, 0, 8, 0),
+    ass = ass_header(("Line", st["font"], 100, st["primary"], 0, 0, 8, 0),
                      ("Sub", "Aeonik Pro", 60, st["primary"], 0, 0, 8, 0),
-                     ("Footer", st["footer_font"], 84, st["active"], 0, 0, 8, 0))
+                     ("Footer", st["footer_font"], 76, st["active"], 0, 0, 8, 0))
     ass += "".join(f"Dialogue: 0,{ass_time(0)},{ass_time(CARD_S)},{name},,0,0,0,,{{\\an8\\pos({CANVAS_W // 2},{y})}}{text}\n"
                    for y, name, text in events)
     (out_dir / "card.ass").write_text(ass, encoding="utf-8-sig")
@@ -1449,7 +1533,7 @@ def build_card(out_dir: Path, card, root: Path) -> Path:
 def cmd_join(args, root: Path, work_dir):
     """Join finished clips (burned, so already equally loud) and an optional end card into
     clips/work/<slug>/<slug>.mp4, as listed in clips/work/<slug>/montage.json:
-    {"pieces": ["YYYY-MM-DD:id", ...], "card": {"lines": [...], "subtitle": "...", "link": "..."}}"""
+    {"pieces": ["YYYY-MM-DD:id", ...], "card": {"lines": [...], "accent": n, "subtitle": "...", "link": "..."}}"""
     out_dir = root / "clips" / "work" / args.montage
     montage = load_json(out_dir / "montage.json")
     inputs = [work_dir_for(root, event) / "final" / f"clip_{cid}.final.mp4"
@@ -1517,6 +1601,10 @@ def build_parser():
                    help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\".")
     p = command("burn", cmd_burn, "Render the final vertical clip with captions.", ids=chosen)
     p.add_argument("--crop", metavar="W:H:X:Y", help="Show only this part of the picture (stored; \"none\" clears it).")
+    p = command("cover", cmd_cover, "Draw a cover still: final/clip_<id>.cover.png.", ids="The clip (one id).")
+    p.add_argument("--at", type=float, required=True, help="Frame time in seconds, as the player shows the final clip.")
+    p.add_argument("--title", action="append", required=True, metavar="LINE", help="A title line; repeat for more lines.")
+    p.add_argument("--accent", type=int, help="Line number shown in turquoise (default: the last).")
     p = command("join", cmd_join, "Join finished clips and an end card as listed in clips/work/<slug>/montage.json.")
     p.add_argument("--montage", required=True, metavar="SLUG", help="Montage name, e.g. chi-siamo.")
     return parser
