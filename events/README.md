@@ -24,7 +24,7 @@ Esempi:
 - `Demo: [demo/](./demo/)`
 - `Repository: [nome-progetto](https://github.com/...)`
 
-Se per un evento non ci sono materiali da condividere, la sezione puo anche essere omessa.
+Se per un evento non ci sono materiali da condividere, la sezione può anche essere omessa.
 
 ## Template
 
