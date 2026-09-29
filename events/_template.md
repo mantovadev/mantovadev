@@ -1,34 +1,37 @@
-# Titolo evento
+# Mantova Dev #N - Titolo
 
 - **Data:** YYYY-MM-DD
-- **Orario:** HH:MM - HH:MM
-- **Luogo:** TBD
+- **Orario:** 18:30 - 20:30
+- **Luogo:** Creative Lab Mantova, Viale Valle d'Aosta, 20, 46100 Lunetta-frassino MN ([indicazioni](https://maps.app.goo.gl/G7bRjQLmJYS8ARz68))
+- **Iscrizione:** [Eventbrite](https://www.eventbrite.it/e/...) (gratuita)
 
 ## Descrizione
 
-Breve descrizione dell'incontro.
+Una o due frasi per incuriosire.
 
 ## Agenda
 
-1) Benvenuto
-2) Talk
-3) Networking
+- 18:30 - 19:00 · Apertura porte e benvenuto
+- 19:00 - 20:00 · Talk: Titolo talk (Speaker)
+- 20:00 - 20:30 · Q&A e saluti
 
 ## Talk
 
-- **Titolo:** Titolo Talk
-- **Speaker:** Presentatori
-- **Descrizione:**
-Descrizione degli argomenti trattati.
+### Titolo talk
+
+**Speaker:** [Nome Cognome](https://...)
+
+Descrizione del talk. Se nella serata ci sono più talk, ripetere il blocco `###` per ciascuno.
 
 ## Come partecipare
 
-Inserire qui eventuale link iscrizione (es. Eventbrite/Meetup) oppure indicazioni libere.
+L'evento è gratuito, iscriviti su [Eventbrite](https://www.eventbrite.it/e/...).
 
 ## Risorse
 
-Elencare qui eventuali materiali collegati, ad esempio. Questa sezione puo essere completata anche dopo la creazione iniziale dell'evento.
+Da completare dopo l'evento con i materiali collegati, ad esempio:
 
 - Slide: [slides.pdf](./slides.pdf)
 - Demo: [demo/](./demo/)
 - Repository: [nome-progetto](https://github.com/...)
+- Registrazione: [YouTube](https://www.youtube.com/watch?v=...)

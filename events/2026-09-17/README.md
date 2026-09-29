@@ -20,15 +20,11 @@ A seguire, Andrea Manzini terrà il talk principale della serata.
 
 - **Titolo:** Green Computing in Pratica: Quanta energia consuma il tuo codice? Impariamo a misurarlo!
 - **Speaker:** [Andrea Manzini](https://www.linkedin.com/in/andreamanzini/)
-- **Descrizione:** I programmi che scriviamo ed usiamo ogni giorno hanno un costo energetico. 
-Nell'era dell'IA e dell'esplosione dei consumi dei data center, quanto costa davvero far girare il nostro software? 
-In questo talk pratico scopriremo come misurare i Joule e Watt (ovvero gli euro) consumati dal software direttamente sul computer, senza bisogno di hardware esterno. 
-Attraverso esempi reali e confronti sorprendenti, impareremo come ottimizzare il codice per abbattere i costi di infrastruttura e renderlo non solo più veloce, ma anche
- concretamente più sostenibile.
+- **Descrizione:** I programmi che scriviamo ed usiamo ogni giorno hanno un costo energetico. Nell'era dell'IA e dell'esplosione dei consumi dei data center, quanto costa davvero far girare il nostro software? In questo talk pratico scopriremo come misurare i Joule e Watt (ovvero gli euro) consumati dal software direttamente sul computer, senza bisogno di hardware esterno. Attraverso esempi reali e confronti sorprendenti, impareremo come ottimizzare il codice per abbattere i costi di infrastruttura e renderlo non solo più veloce, ma anche concretamente più sostenibile.
 
 ## Come partecipare
 
-Link iscrizione Eventbrite: https://www.eventbrite.it/e/1990489994155
+Link iscrizione Eventbrite: https://www.eventbrite.it/e/1999011553368
 
 ## Risorse
 
