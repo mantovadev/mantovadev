@@ -85,11 +85,11 @@ STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
 # quiet run found by silencedetect on the clip itself, at the same noise floor as preview.
 TIGHT_DETECT_S = 0.15       # shortest quiet run silencedetect reports for tighten
 TIGHT_MERGE_S = 0.03        # quiet runs split by a click shorter than this count as one
-# Only long pauses are touched, and they keep about half a second: short pauses are
-# speech rhythm, and a speaker without them sounds rushed.
-TIGHT_MIN_PAUSE = 0.7       # shorter pauses are speech rhythm and stay as they are
-TIGHT_GAP = 0.45            # what a pause is shortened to inside a sentence
-TIGHT_GAP_SENTENCE = 0.6    # ... and after a word ending in . ? !
+# A clip should move: a pause keeps about a third of a second, a little more after a
+# sentence. The shortest pauses are speech rhythm and stay as they are.
+TIGHT_MIN_PAUSE = 0.4       # shorter pauses are speech rhythm and stay as they are
+TIGHT_GAP = 0.28            # what a pause is shortened to inside a sentence
+TIGHT_GAP_SENTENCE = 0.38   # ... and after a word ending in . ? !
 TIGHT_HEAD = 0.6            # share of the kept gap left right after the previous word
                             # (consonant release, room tail); the rest leads into the next word
 TIGHT_MIN_CUT = 0.10        # do not bother splicing for less than this
@@ -102,6 +102,15 @@ DROP_AHEAD = 0.3
 # edge that finds no pause tries again at these louder floors.
 DROP_NOISE_LADDER = ("-30dB", "-25dB")
 DROP_SEP = " ... "          # --drop "ID=first words ... last words"
+DROP_TIMES_RE = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$")  # --drop "ID=12.4-14.5", clip seconds
+# Sound between two words that no word covers: a hesitation whisper left out, or speech
+# past the last word. Reported, never cut on its own.
+UNTRANSCRIBED_MIN_S = 0.7   # less is often a long word (numbers: "494") whose end is estimated short
+# tighten --fillers: whisper leaves out hesitations unless its prompt is full of them. That
+# second pass only locates them; the captions keep the words file.
+FILLER_PROMPT = "Ehm, allora, eee... cioè, mmh, ehm, praticamente eh, insomma... eee, mmm."
+FILLER_RE = re.compile(r"^(?!e$)(e+h*m*|m+h*|u+h*m+)$")  # not "e", the conjunction
+FILLER_KEEP = 0.05          # left before the next word
 
 # burn: loudness, in LUFS (the loudness unit the platforms normalize to; -14 is what
 # YouTube plays at). Every clip is brought to it, so clips and montage pieces match.
@@ -859,6 +868,12 @@ def cmd_cut(args, root: Path, work_dir: Path):
             fail(f"ffmpeg failed cutting candidate {cid}")
         print(f"Wrote {out}")
         align_clip(base, default_model(root), glossary)
+        words = read_words(Path(str(base) + ".words.tsv"))
+        quiet = merge_quiet_runs(detect_silences(out, TIGHT_DETECT_S), TIGHT_MERGE_S)
+        for gap in untranscribed(words, quiet, ffprobe_duration(out)):
+            if gap["after"] in (None, len(words) - 1):
+                print(f"  warning: {describe_untranscribed(gap, words)}: probably the previous or next "
+                      "sentence. Listen, then move that edge with choose and cut --force.")
 
 
 # ==================================================================
@@ -930,12 +945,13 @@ def words_from_raw(raw: dict):
     return cleaned
 
 
-def dtw_words(model: Path, wav: Path, raw_prefix: Path):
+def dtw_words(model: Path, wav: Path, raw_prefix: Path, prompt: str = ""):
     """Words with DTW start times for a 16 kHz mono wav, in seconds from its start.
     No VAD on purpose: with VAD, token times lose the removed silence. DTW needs flash
     attention off. Writes <raw_prefix>.json."""
     proc = run(["whisper-cli", "-m", str(model), "-l", LANGUAGE, "-ojf",
-                "-dtw", dtw_preset(model), "-nfa", "-of", str(raw_prefix), "-f", str(wav)],
+                "-dtw", dtw_preset(model), "-nfa", "-of", str(raw_prefix), "-f", str(wav)]
+               + (["--prompt", prompt] if prompt else []),
                capture_output=True, text=True)
     if proc.returncode:
         fail(f"whisper-cli failed: {proc.stderr.strip()[-400:]}")
@@ -1013,6 +1029,36 @@ def merge_quiet_runs(intervals, max_blip: float):
     return merged
 
 
+def untranscribed(words, quiet_runs, duration, cuts=()):
+    """Stretches before, between and after the words where there is sound but no word, and
+    nothing cut. after: the index of the word before, None before the first word."""
+    found = []
+    edges = [(None, 0.0, words[0]["s"])] if words else []
+    edges += [(i, words[i]["e"], words[i + 1]["s"]) for i in range(len(words) - 1)]
+    if words:
+        edges.append((len(words) - 1, words[-1]["e"], duration))
+    for after, start, end in edges:
+        covered = sorted((max(start, r["start"]), min(end, r["end"])) for r in list(quiet_runs) + list(cuts)
+                         if r["end"] > start and r["start"] < end)
+        sound, pos = end - start, start
+        for a, b in covered:
+            sound -= max(0.0, b - max(a, pos))
+            pos = max(pos, b)
+        if sound >= UNTRANSCRIBED_MIN_S:
+            found.append({"start": start, "end": end, "sound": sound, "after": after})
+    return found
+
+
+def describe_untranscribed(gap, words) -> str:
+    if gap["after"] is None:
+        where = f"before \"{words[0]['w']}\", the first word"
+    elif gap["after"] == len(words) - 1:
+        where = f"after \"{words[-1]['w']}\", the last word"
+    else:
+        where = f"between \"{words[gap['after']]['w']}\" and \"{words[gap['after'] + 1]['w']}\""
+    return f"{gap['sound']:.1f} s of sound with no words {where} ({gap['start']:.2f}-{gap['end']:.2f})"
+
+
 def plan_pauses(words, quiet_runs, duration, fps, video_start):
     """One cut per pause worth shortening, on the clip's video frame grid. The audio says
     where a pause is, the words only say how much of it to keep: more after a sentence end.
@@ -1042,6 +1088,38 @@ def plan_pauses(words, quiet_runs, duration, fps, video_start):
     return cuts
 
 
+def plan_fillers(base: Path, model: Path, words, quiet_runs, fps, video_start):
+    """One cut per hesitation, from its onset to just before the next word. It counts only
+    where the words file has a gap and the gap is not mostly quiet (the pauses cover that)."""
+    wav = Path(str(base) + ".fillers.wav")
+    run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(base.with_suffix(".mp4")),
+         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
+    found = [w for w in dtw_words(model, wav, Path(str(base) + ".fillers"), FILLER_PROMPT)
+             if FILLER_RE.match(norm_word(w["w"]))]
+    wav.unlink()
+    cuts = []
+    for filler in found:
+        before = [i for i, w in enumerate(words) if w["s"] < filler["s"]]
+        if not before or before[-1] + 1 >= len(words) or filler["s"] < words[before[-1]]["e"]:
+            continue
+        i = before[-1]
+        start, end = filler["s"], words[i + 1]["s"] - FILLER_KEEP
+        quiet = sum(max(0.0, min(end, r["end"]) - max(start, r["start"])) for r in quiet_runs)
+        if quiet > (end - start) / 2:
+            continue
+        a = math.ceil((start - video_start) * fps - 1e-6)
+        b = math.floor((end - video_start) * fps + 1e-6)
+        if (b - a) / fps < TIGHT_MIN_CUT:
+            continue
+        cuts.append({
+            "start_frame": a, "end_frame": b,
+            "start": round(video_start + a / fps, 3), "end": round(video_start + b / fps, 3),
+            "reason": "filler", "text": filler["w"].strip(".,;:?!"),
+            "after": i, "after_word": words[i]["w"],
+        })
+    return cuts
+
+
 def find_words(words, phrase: str, start: int = 0):
     """Indices where the phrase begins in the words list, and its length in words."""
     target = [norm_word(w) for w in phrase.split() if norm_word(w)]
@@ -1055,7 +1133,26 @@ def plan_drop(words, quiet_levels, fps, video_start, spec: str, clip_id):
     """A cut that removes a stretch of speech, given by its words: "first words ... last
     words", or one phrase to drop just that. Word times only find the two pauses, the
     edges then sit inside them, and between them the pause left over is as long as any
-    other shortened pause."""
+    other shortened pause. Or "start-end" in clip seconds, taken as given: for sound the
+    words file does not hold."""
+    times = DROP_TIMES_RE.match(spec)
+    if times:
+        start, end = float(times.group(1)), float(times.group(2))
+        if not words or start >= end or start <= words[0]["s"] or end >= words[-1]["e"]:
+            fail(f"clip {clip_id}: the drop {spec} is empty or reaches the edge of the clip. Move the "
+                 "clip's start or end with choose instead.")
+        inside = [k for k, w in enumerate(words) if w["s"] >= start and w["e"] <= end]
+        a = math.ceil((start - video_start) * fps - 1e-6)
+        b = math.floor((end - video_start) * fps + 1e-6)
+        after = max(k for k, w in enumerate(words) if w["s"] < start)
+        return {
+            "start_frame": a, "end_frame": b,
+            "start": round(video_start + a / fps, 3), "end": round(video_start + b / fps, 3),
+            "reason": "drop", "from_index": inside[0] if inside else after + 1,
+            "to_index": inside[-1] if inside else after,
+            "text": " ".join(words[k]["w"] for k in inside) or f"{start:.2f}-{end:.2f}",
+            "after": after, "after_word": words[after]["w"],
+        }
     first, sep, last = spec.partition(DROP_SEP)
     hits, n = find_words(words, first)
     if len(hits) != 1:
@@ -1187,7 +1284,8 @@ def tighten_graph(keeps, fps, video_start) -> str:
     return ";\n".join(lines) + "\n"
 
 
-def print_tighten_report(clip_id, words, plan, keeps):
+def print_tighten_report(clip_id, words, plan, keeps, gaps):
+    """Cut times are in the tightened clip, as its player shows them."""
     fps = plan["fps"]
     duration = plan["frames"] / fps
     tight = sum(b - a for a, b in keeps) / fps
@@ -1198,9 +1296,12 @@ def print_tighten_report(clip_id, words, plan, keeps):
         length = cut["end"] - cut["start"]
         if cut["reason"] == "drop":
             state = f"dropped \"{cut['text']}\", {length:.1f} s out"
+        elif cut["reason"] == "filler":
+            state = f"hesitation \"{cut['text']}\", {length:.2f} s out"
         else:
             state = f"pause {cut['pause']:.2f} s -> {cut['pause'] - length:.2f} s"
-        print(f"  [{n}] {clock(cut['start'])} after \"{cut['after_word']}\": {state}")
+        at = tight_time(cut["start"], keeps, fps, plan["video_start"])
+        print(f"  [{n}] {clock(at)} after \"{cut['after_word']}\": {state}")
     marks = {}
     for n, cut in enumerate(plan["cuts"], 1):
         marks.setdefault(cut["after"], []).append(f"[{n}]")
@@ -1210,6 +1311,10 @@ def print_tighten_report(clip_id, words, plan, keeps):
         if i not in gone:
             text += " " + " ".join([word["w"]] + marks.get(i, []))
     print(textwrap.fill(text.strip(), width=100, initial_indent="  ", subsequent_indent="  "))
+    for gap in gaps:
+        at = tight_time(gap["start"], keeps, fps, plan["video_start"])
+        print(f"  check at {clock(at)}: {describe_untranscribed(gap, words)}. A hesitation goes with "
+              f"--drop '{clip_id}=<start>-<end>' (clip seconds), speech past the edge with choose.")
     if tight > TOO_LONG_S:
         print(f"  warning: still over {TOO_LONG_S:.0f} s. Drop more, or move the clip's start or end with choose.")
 
@@ -1225,7 +1330,11 @@ def cmd_tighten(args, root: Path, work_dir: Path):
         fps, video_start, frames = ffprobe_video(clip)
         levels = [merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S, noise), TIGHT_MERGE_S)
                   for noise in (SILENCE_NOISE,) + DROP_NOISE_LADDER]
-        cuts = plan_pauses(words, levels[0], ffprobe_duration(clip), fps, video_start)
+        duration = ffprobe_duration(clip)
+        cuts = plan_pauses(words, levels[0], duration, fps, video_start)
+        if args.fillers:
+            cuts = sorted(cuts + plan_fillers(base, default_model(root), words, levels[0], fps, video_start),
+                          key=lambda c: c["start_frame"])
         for cid, spec in drops:
             if cid != clip_id:
                 continue
@@ -1236,7 +1345,7 @@ def cmd_tighten(args, root: Path, work_dir: Path):
         plan = {"fps": fps, "video_start": video_start, "frames": frames, "words": len(words), "cuts": cuts}
         save_json(Path(str(base) + ".tighten.json"), plan)
         keeps = keep_ranges(cuts, frames)
-        print_tighten_report(clip_id, words, plan, keeps)
+        print_tighten_report(clip_id, words, plan, keeps, untranscribed(words, levels[0], duration, cuts))
         if len(keeps) < 2:
             print("  nothing to tighten: burn will use the clip as it is.")
             continue
@@ -1598,7 +1707,8 @@ def build_parser():
     p.add_argument("--force", action="store_true", help="Overwrite an existing clip and its words file.")
     p = command("tighten", cmd_tighten, "Shorten long pauses and drop stretches: final/clip_<id>.tight.mp4.", ids=chosen)
     p.add_argument("--drop", action="append", metavar="ID=WORDS",
-                   help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\".")
+                   help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\", or 3=12.4-14.5 in clip seconds.")
+    p.add_argument("--fillers", action="store_true", help="Also cut hesitations (eh, ehm, mmh) between words.")
     p = command("burn", cmd_burn, "Render the final vertical clip with captions.", ids=chosen)
     p.add_argument("--crop", metavar="W:H:X:Y", help="Show only this part of the picture (stored; \"none\" clears it).")
     p = command("cover", cmd_cover, "Draw a cover still: final/clip_<id>.cover.png.", ids="The clip (one id).")

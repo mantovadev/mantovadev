@@ -20,7 +20,8 @@ It also joins finished clips into a montage.
 4. `cover`: a 1080x1920 still to upload as the post's cover (Instagram, TikTok,
    YouTube Studio): logo, a frame of the clip and a large title, kept inside the 3:4
    and 4:5 crops of profile grids and feeds.
-5. `join` (montages only): finished clips from any events plus an end card.
+5. `join`: the end card every post ends with, and montages of finished clips from
+   any events.
 
 Pass `--ids <id>` on every command: without it a command acts on every chosen
 candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
@@ -63,9 +64,14 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
      reorder or reword. Quote the words as in the words file.
    - Both edges of a drop must land on a real pause, or `tighten` refuses it: widen it
      to the nearest pauses, or leave the stretch in.
-   - Pauses of 0.7 s or more are shortened to about half a second. On a fluent
-     speaker this gains little: estimate the gain from the pauses in the report, not
-     from gaps in the words file. Drops are what shortens a clip.
+   - Pauses of 0.4 s or more are shortened to about 0.3 s. Estimate the gain from the
+     pauses in the report, not from gaps in the words file. Drops are what shortens a
+     clip.
+   - `--fillers` also cuts hesitations (eh, ehm, mmh) between words; the report lists
+     each one. Pass it on every run once the human wants them out.
+   - The report flags sound with no words (a hesitation or a false start whisper left
+     out). Ask the human; to cut it, `--drop '<id>=<start>-<end>'` in clip seconds, as
+     the report prints them. Report times are the tightened player's.
    - Every run plans from scratch: give all the drops each time. The clip's start and
      end are not `tighten`'s job: move them with `choose`, then `cut --force`.
    - Open `clip_<id>.tight.mp4` and ask about each splice.
@@ -81,18 +87,20 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    text; the player shows tightened times) and burn again. Repeat until approved.
 
 7. Propose the post text in the chat: Italian, informal, no hype, only what the clip
-   says and what `events/<event>/README.md` holds. A title of at most 60 characters,
+   says and what `events/<event>/README.md` holds. Title and caption are about the
+   talk's topic, in plain words: no teaser, no striking numbers. Earlier `post.txt`
+   files in the delivery folder show the tone. A title of at most 60 characters,
    a caption of 2 or 3 short sentences ending with an invitation to the next meetup and
    `https://mantova.dev`, 5 to 8 hashtags (`#MantovaDev` `#Mantova` plus topic ones).
    Name the speaker only if the event README does. Nothing dated.
 
 8. Cover. Propose a cover title with the post text: 1 to 3 short lines (at most 12
-   characters each), a question or a hook, not the post title verbatim. Then pick a
+   characters each), the topic in a few words, not the post title verbatim. Then pick a
    frame: the speaker still (no motion blur), facing the room, ideally with a slide
    that matches the title. A contact sheet helps the human choose:
 
    ```
-   ffmpeg -i clips/work/<event>/final/clip_<id>.final.mp4 -vf "fps=1/1.5,scale=384:-2,tile=5x4" -frames:v 1 clips/work/<event>/final/clip_<id>.frames.png
+   ffmpeg -i clips/work/<event>/final/clip_<id>.final.mp4 -vf "select='isnan(prev_selected_t)+gte(t-prev_selected_t,1.5)',scale=384:-2,tile=5x8" -frames:v 1 clips/work/<event>/final/clip_<id>.frames.png
    ```
 
    ```
@@ -109,7 +117,7 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
 
    ```
    YYYYMMDD-mantovadev-<slug>/   # today's date
-     video.mp4                   # clip_<id>.final.mp4, or the montage
+     video.mp4                   # the montage, with its end card
      cover.png                   # clip_<id>.cover.png
      post.txt                    # the approved text, as below
    ```
@@ -129,17 +137,20 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
 
 ## Montage
 
-For a montage (e.g. "chi siamo"), finish each piece as above, then write
+Every post ends with an end card, so a single clip is a montage of one piece. For a
+montage (e.g. "chi siamo"), finish each piece as above, then write
 `clips/work/<slug>/montage.json` and run `clips/clips.py join --montage <slug>`:
 
 ```json
 {
   "pieces": ["2026-06-18:1", "2026-09-17:3", "2026-04-09:7"],
-  "card": {"lines": ["CI VEDIAMO", "AL PROSSIMO", "INCONTRO!"], "subtitle": "Gratuito e aperto a tutti"}
+  "card": {"lines": ["CI VEDIAMO", "AL PROSSIMO", "INCONTRO!"], "subtitle": "Un meetup tech al mese, a Mantova"}
 }
 ```
 
-Pieces play in order, as plain cuts, at the same loudness. The optional end card shows
+Card lines: the clip's topic or the montage's message, as short as the cover title.
+
+Pieces play in order, as plain cuts, at the same loudness. The end card shows
 the logo, the lines (the last in turquoise, or line `"accent": n`), the subtitle and the link (default
 `https://mantova.dev`) for 3 s. The result is `clips/work/<slug>/<slug>.mp4`. Pieces
 can be short (8 to 25 s each); keep the whole under 90 s and the middle brisk.
