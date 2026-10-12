@@ -144,11 +144,13 @@ montage (e.g. "chi siamo"), finish each piece as above, then write
 ```json
 {
   "pieces": ["2026-06-18:1", "2026-09-17:3", "2026-04-09:7"],
-  "card": {"lines": ["CI VEDIAMO", "AL PROSSIMO", "INCONTRO!"], "subtitle": "Un meetup tech al mese, a Mantova"}
+  "card": {"lines": ["COS'È", "MANTOVA DEV?"], "subtitle": "Vieni al prossimo incontro!"}
 }
 ```
 
 Card lines: the clip's topic or the montage's message, as short as the cover title.
+Subtitle: a short payoff picked for each post with the human (e.g. "Game dev con
+Godot", "Vieni al prossimo incontro!"), or none.
 
 Pieces play in order, as plain cuts, at the same loudness. The end card shows
 the logo, the lines (the last in turquoise, or line `"accent": n`), the subtitle and the link (default
