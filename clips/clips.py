@@ -75,10 +75,10 @@ MIN_WORD = 0.08          # minimum spacing between consecutive word starts
 LAST_WORD_HOLD = 0.6     # how long the final word of a chunk stays if nothing follows
 
 # burn: chunking. A chunk is what is on screen at once.
-MAX_WORDS = 3
-MAX_CHARS = 12          # upper case Aeonik Black at size 90: 12 chars end ~60 px left of the action buttons
+MAX_WORDS = 4
+MAX_CHARS = 18          # upper case Aeonik Black at size 68: 18 chars end ~20 px left of the action buttons
 GAP_BREAK = 0.45        # a pause this long always starts a new chunk
-BREAK_AFTER = ".?!,;:"  # punctuation that ends a chunk
+BREAK_AFTER = ".?!;:"   # punctuation that ends a chunk
 STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
 
 # tighten: pauses inside a cut clip are shortened, never removed whole. A pause is a
@@ -124,7 +124,7 @@ CANVAS_W, CANVAS_H = 1080, 1920   # output is always vertical
 LOGO_W = 560             # logo width and top offset on the canvas
 LOGO_Y = 250
 MAX_VIDEO_H = 920        # tallest picture that leaves room for captions and link
-CAPTION_GAP = 40         # between the picture and the captions
+CAPTION_GAP = 55         # between the picture and the captions
 FOOTER = "https://mantova.dev"   # static text at the bottom of every clip
 
 # join: montage frame rate, audio fades at each join, and the end card layout.
@@ -156,15 +156,15 @@ DEFAULT_STYLE = {
     "font": "Aeonik Pro Black",
     "footer_font": "Aeonik Pro Bold",
     "footer_size": 56,
-    "footer_margin_v": 390,
+    "footer_margin_v": 425,
     "background": "041917",      # canvas colour (brand dark), RRGGBB
-    "size": 90,                  # caption font size on the 1080x1920 canvas
+    "size": 68,                  # caption font size on the 1080x1920 canvas
     "primary": "&H00FFFFFF",     # ASS colours are &HAABBGGRR
     "active": "&H00CFE003",      # highlighted word: Mantova Dev turquoise #03E0CF
     "outline_colour": "&H00000000",
     "outline": 4,
     "shadow": 2,
-    "active_scale": 108,         # percent
+    "active_scale": 100,         # percent
     "uppercase": True,
 }
 
