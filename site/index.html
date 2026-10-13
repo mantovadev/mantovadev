@@ -82,7 +82,7 @@
     /* drawn as a background so it spans the text width, like the bars above the cards */
     section + section { background: linear-gradient(var(--accent), var(--accent)) top / calc(100% - 32px) 3px no-repeat; }
   }
-  .logo { display: block; width: min(26rem, 100%); height: auto; margin-inline: auto; }
+  .logo { display: block; width: 26rem; max-width: 100%; height: auto; margin-inline: auto; }
   section { position: relative; max-width: calc(46rem + 32px); margin-inline: auto; padding: 5rem 16px; }
   /* phones: the hero leaves room for the first section's band (1rem + 39px) so it shows on the opening screen */
   @media (width < 80rem) {
