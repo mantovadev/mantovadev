@@ -26,3 +26,6 @@
 # All run outputs and models: never committed.
 clips/work/
 clips/models/
+
+# Git worktrees
+.worktrees/
