@@ -50,6 +50,7 @@ Canali attivi:
 - [`assets/`](assets/) → materiali grafici, template, immagini e branding
 - [`events/`](events/) → dettagli dei singoli eventi e relativi materiali
 - [`clips/`](clips/) → pipeline agentica che trasforma la registrazione di un meetup in brevi clip verticali con sottotitoli per i social. Dettagli in [`clips/README.md`](clips/README.md)
+- [`site/`](site/) → il sito [mantova.dev](https://mantova.dev): una pagina statica, senza build
 
 ### Assets Guide
 

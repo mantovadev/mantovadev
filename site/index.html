@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mantova Dev</title>
+<meta name="description" content="La tech community di Mantova per sviluppatori e appassionati. Un meetup gratuito al mese: talk, demo e networking.">
+<meta name="theme-color" content="#041917">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mantova.dev/">
+<meta property="og:title" content="Mantova Dev">
+<meta property="og:description" content="La tech community per sviluppatori e appassionati. Un meetup gratuito al mese a Mantova.">
+<meta property="og:image" content="https://mantova.dev/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="it_IT">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
+<style>
+  :root {
+    --accent: #03e0cf;
+    --magenta: #e00384;
+    --bg: #041917;
+    --ink: #fffafb;
+    --muted: color-mix(in srgb, var(--ink) 72%, var(--bg));
+    --px: min(20rem, 40vw);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 500 1.125rem/1.6 Satoshi, system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+  /* fixed glows behind the page: teal on top fades out while magenta fades in as you scroll,
+     like the teal-to-magenta gradient of the YouTube cover */
+  body::before, body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+  body::before { background: radial-gradient(ellipse 70% 55% at 50% 40%, color-mix(in srgb, var(--accent) 13%, transparent), transparent); }
+  body::after { background: radial-gradient(ellipse 130% 85% at 70% 100%, color-mix(in srgb, var(--magenta) 30%, transparent), transparent); opacity: 0; }
+  @supports (animation-timeline: scroll()) {
+    body::before { animation: glow-out linear both; animation-timeline: scroll(root); }
+    body::after { animation: glow-in linear both; animation-timeline: scroll(root); }
+  }
+  @keyframes glow-out { to { opacity: .3; } }
+  @keyframes glow-in { to { opacity: 1; } }
+  .hero {
+    position: relative;
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    /* keep content clear of the corner blocks (viewBox ratio 14/24 plus a gap) */
+    padding: calc(var(--px) * .6 + 1.5rem) max(16px, 6vw);
+    text-align: center;
+  }
+  .hero > :not(.px) { max-width: 46rem; }
+  .px { position: absolute; width: var(--px); aspect-ratio: 24 / 14; color: var(--accent); pointer-events: none; }
+  .px.top { top: 0; right: 0; }
+  .px.bottom { bottom: 0; left: 0; transform: rotate(180deg); }
+  /* wide screens: frame the content from the sides, like the event banners */
+  @media (min-width: 90rem) {
+    .hero { padding-block: 4rem; }
+    .px.top { top: 14%; }
+    .px.bottom { bottom: 14%; }
+  }
+  .logo { display: block; width: min(26rem, 100%); height: auto; margin-inline: auto; }
+  section { max-width: calc(46rem + 32px); margin-inline: auto; padding: 5rem 16px; }
+  section + section { border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  /* magenta is the talk.md sub-brand color */
+  #proponi { --accent: var(--magenta); }
+  #proponi .cta a:not(:hover) { color: var(--ink); }
+  .label { color: var(--accent); font-weight: 700; }
+  h2 { margin-top: .25rem; font-size: clamp(1.75rem, 4vw, 2.25rem); line-height: 1.15; text-transform: uppercase; }
+  h2, h3 { text-wrap: balance; }
+  p { text-wrap: pretty; }
+  section p { margin-top: 1rem; color: var(--muted); }
+  .chip {
+    display: inline-block;
+    margin-top: 2.5rem;
+    padding: .2rem .7rem;
+    background: var(--ink);
+    color: var(--bg);
+    font-weight: 700;
+  }
+  .tagline { margin-top: 1rem; font-size: clamp(1.75rem, 5vw, 2.75rem); line-height: 1.15; font-weight: 700; text-transform: uppercase; }
+  .about { margin-top: 1rem; color: var(--muted); }
+  .cta { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
+  .hero .cta { justify-content: center; }
+  .cta a {
+    padding: .7rem 1.2rem;
+    border: 2px solid var(--accent);
+    color: var(--accent);
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .cta a:first-child { background: var(--accent); color: var(--bg); }
+  .cta a:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .5rem 1rem; margin-top: 2.5rem; }
+  /* subgrid keeps headings and texts on shared rows, even when a heading wraps */
+  .cards div { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: .25rem; border-top: 3px solid var(--accent); padding-top: .75rem; }
+  .cards h3 { font-size: 1rem; text-transform: uppercase; }
+  .cards p { margin: 0 0 1.5rem; font-size: 1rem; text-wrap: wrap; }
+  .links { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin-top: 2rem; padding: 0; list-style: none; }
+  .links a { display: grid; place-items: center; width: 3rem; height: 3rem; border: 2px solid color-mix(in srgb, var(--accent) 45%, var(--bg)); color: var(--ink); }
+  .links a:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .links svg { width: 1.6rem; height: 1.6rem; }
+  a:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <svg class="px top" aria-hidden="true"><use href="icons.svg#px"/></svg>
+  <svg class="px bottom" aria-hidden="true"><use href="icons.svg#px"/></svg>
+  <h1>
+    <img class="logo" src="logo.svg" alt="Mantova Dev" width="1311" height="177">
+  </h1>
+
+  <p class="chip">Eventi gratuiti</p>
+  <p class="tagline">La tech community per sviluppatori e appassionati</p>
+  <p class="about">Un meetup al mese a Mantova per developer, studenti, professionisti e curiosi.</p>
+
+  <div class="cta">
+    <a href="https://www.eventbrite.com/cc/mantova-dev-4822410" target="_blank" rel="noopener">Prossimi eventi</a>
+    <a href="#proponi">Proponi un talk</a>
+  </div>
+  <ul class="links">
+    <li><a href="https://t.me/+uESvpTqd1ZpmZGE0" target="_blank" rel="noopener" aria-label="Telegram" title="Telegram"><svg aria-hidden="true"><use href="icons.svg#telegram"/></svg></a></li>
+    <li><a href="https://www.linkedin.com/company/mantovadev" target="_blank" rel="noopener" aria-label="LinkedIn" title="LinkedIn"><svg aria-hidden="true"><use href="icons.svg#linkedin"/></svg></a></li>
+    <li><a href="https://www.youtube.com/@MantovaDev" target="_blank" rel="noopener" aria-label="YouTube" title="YouTube"><svg aria-hidden="true"><use href="icons.svg#youtube"/></svg></a></li>
+    <li><a href="https://www.instagram.com/mantovadev" target="_blank" rel="noopener" aria-label="Instagram" title="Instagram"><svg aria-hidden="true"><use href="icons.svg#instagram"/></svg></a></li>
+    <li><a href="https://www.facebook.com/people/Mantova-Dev/61585731386115" target="_blank" rel="noopener" aria-label="Facebook" title="Facebook"><svg aria-hidden="true"><use href="icons.svg#facebook"/></svg></a></li>
+    <li><a href="https://github.com/mantovadev/mantovadev" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg aria-hidden="true"><use href="icons.svg#github"/></svg></a></li>
+  </ul>
+</header>
+
+<main>
+  <section id="chi-siamo">
+    <p class="label">chi-siamo.md</p>
+    <h2>Chi siamo</h2>
+    <p>Siamo una community locale nata per creare momenti di incontro informali tra chi si interessa di informatica, software e tecnologia: per lavoro, per studio o per semplice curiosità.</p>
+    <p>Vogliamo che a Mantova ci sia un punto di ritrovo dove condividere esperienze reali, imparare qualcosa di nuovo e trovare qualcuno con cui confrontarsi su un problema, un'idea o un progetto.</p>
+  </section>
+
+  <section id="cosa-facciamo">
+    <p class="label">cosa-organizziamo.md</p>
+    <h2>Cosa organizziamo</h2>
+    <div class="cards">
+      <div>
+        <h3>Meetup mensili</h3>
+        <p>Un incontro al mese, gratuito e aperto a tutti. Basta iscriversi all'evento.</p>
+      </div>
+      <div>
+        <h3>Talk e discussioni</h3>
+        <p>Interventi su programmazione, strumenti, processi, prodotti digitali ed esperienze personali.</p>
+      </div>
+      <div>
+        <h3>Networking</h3>
+        <p>Occasioni per conoscersi e scambiare idee con developer, studenti, professionisti e curiosi.</p>
+      </div>
+    </div>
+    <p>Al centro c'è l'informatica, ma le porte sono aperte a qualsiasi argomento che possa interessare la community. Nessun linguaggio o stack preferito: contano la curiosità e la voglia di condividere.</p>
+  </section>
+
+  <section id="proponi">
+    <p class="label">proponi-un-talk.md</p>
+    <h2>Vuoi proporre un talk?</h2>
+    <p>Chiunque può proporre un intervento, a qualsiasi livello di esperienza: un'idea, una demo, la retrospettiva di un progetto o anche solo uno spunto di discussione. Non servono slide perfette, basta un contenuto utile o che faccia riflettere.</p>
+    <p>Se è la prima volta che parli in pubblico, non preoccuparti: ti aiutiamo a dare una struttura al talk, a preparare le slide e a presentarlo. Scrivici due righe sull'argomento e ne parliamo insieme.</p>
+    <div class="cta">
+      <a href="mailto:mantovadev@gmail.com?subject=Proposta%20talk">Scrivici</a>
+    </div>
+  </section>
+</main>
+
+</body>
+</html>
