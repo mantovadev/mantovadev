@@ -19,55 +19,77 @@
 <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
 <style>
   :root {
-    --accent: #03e0cf;
+    --teal: #03e0cf;
+    --accent: var(--teal);
     --magenta: #e00384;
     --bg: #041917;
     --ink: #fffafb;
     --muted: color-mix(in srgb, var(--ink) 72%, var(--bg));
-    --px: min(20rem, 40vw);
   }
   * { box-sizing: border-box; margin: 0; }
   body {
-    background: var(--bg);
+    /* the teal glow lives on the page, not on .hero, so it stays behind the fixed pixels */
+    background: radial-gradient(ellipse 60% 50% at 50% 45%, color-mix(in srgb, var(--accent) 12%, var(--bg)), var(--bg)) top / 100% 100svh no-repeat, var(--bg);
     color: var(--ink);
     font: 500 1.125rem/1.6 Satoshi, system-ui, sans-serif;
     overflow-x: hidden;
   }
-  /* fixed glows behind the page: teal on top fades out while magenta fades in as you scroll,
-     like the teal-to-magenta gradient of the YouTube cover */
-  body::before, body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
-  body::before { background: radial-gradient(ellipse 70% 55% at 50% 40%, color-mix(in srgb, var(--accent) 13%, transparent), transparent); }
-  body::after { background: radial-gradient(ellipse 130% 85% at 70% 100%, color-mix(in srgb, var(--magenta) 30%, transparent), transparent); opacity: 0; }
-  @supports (animation-timeline: scroll()) {
-    body::before { animation: glow-out linear both; animation-timeline: scroll(root); }
-    body::after { animation: glow-in linear both; animation-timeline: scroll(root); }
-  }
-  @keyframes glow-out { to { opacity: .3; } }
-  @keyframes glow-in { to { opacity: 1; } }
   .hero {
     position: relative;
+    overflow: clip;
     min-height: 100svh;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    /* keep content clear of the corner blocks (viewBox ratio 14/24 plus a gap) */
-    padding: calc(var(--px) * .6 + 1.5rem) max(16px, 6vw);
+    padding: 4rem max(16px, 6vw);
     text-align: center;
   }
   .hero > :not(.px) { max-width: 46rem; }
-  .px { position: absolute; width: var(--px); aspect-ratio: 24 / 14; color: var(--accent); pointer-events: none; }
-  .px.top { top: 0; right: 0; }
-  .px.bottom { bottom: 0; left: 0; transform: rotate(180deg); }
-  /* wide screens: frame the content from the sides, like the event banners */
-  @media (min-width: 90rem) {
-    .hero { padding-block: 4rem; }
-    .px.top { top: 14%; }
-    .px.bottom { bottom: 14%; }
+  /* pixel groups: a --cols x --rows grid of squares, filled by the script at the end */
+  .px { position: absolute; width: calc(var(--cols) * var(--s)); height: calc(var(--rows) * var(--s)); pointer-events: none; }
+  .px.col { display: none; }
+  /* phones: a band of 13px squares atop the hero and each section, alternating right and left */
+  .px.side { --s: 13px; right: 0; }
+  .px.side.left { right: auto; left: 0; transform: scaleX(-1); }
+  .px i {
+    position: absolute;
+    left: calc(var(--x) * var(--s));
+    top: calc(var(--y) * var(--s));
+    width: var(--s);
+    height: var(--s);
+    background: var(--teal);
+    animation: px-drift var(--t) steps(1) var(--d) infinite;
+  }
+  /* browsers without color-mix() keep the squares teal */
+  @supports (color: color-mix(in srgb, red clamp(0%, 50%, 100%), blue)) {
+    .px i { background: color-mix(in srgb, var(--magenta) clamp(0%, (var(--p, 0) - var(--o)) * 400%, 100%), var(--teal)); }
+  }
+  @keyframes px-drift {
+    25% { translate: 100% 0; }
+    50% { translate: 100% -100%; }
+    75% { translate: 0 -100%; }
+  }
+  @media (prefers-reduced-motion: reduce) { .px i { animation: none; } }
+  /* wide screens: two columns pinned to the window edges, filling the margins beside the text */
+  @media (min-width: 80rem) {
+    /* whole-pixel squares: fractional sizes leave thin dark seams between neighbours */
+    .px.col { --px: min(20rem, calc((100vw - 46rem) / 2 - 1rem)); --s: calc(var(--px) / 12); display: block; position: fixed; top: 0; z-index: -1; }
+    @supports (width: round(down, 1.5px, 1px)) { .px.col { --s: round(down, var(--px) / 12, 1px); } }
+    .px.col.left { left: 0; }
+    .px.col.right { right: 0; transform: scaleX(-1); }
+    .px.side { display: none; }
+    /* drawn as a background so it spans the text width, like the bars above the cards */
+    section + section { background: linear-gradient(var(--accent), var(--accent)) top / calc(100% - 32px) 3px no-repeat; }
   }
   .logo { display: block; width: min(26rem, 100%); height: auto; margin-inline: auto; }
-  section { max-width: calc(46rem + 32px); margin-inline: auto; padding: 5rem 16px; }
-  section + section { border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  section { position: relative; max-width: calc(46rem + 32px); margin-inline: auto; padding: 5rem 16px; }
+  /* phones: the hero leaves room for the first section's band (1rem + 39px) so it shows on the opening screen */
+  @media (width < 80rem) {
+    .hero { min-height: calc(100svh - 2rem - 39px); padding-top: calc(1rem + 39px + 2rem); padding-bottom: 1rem; }
+    section { overflow-x: clip; padding: calc(1rem + 39px + 30px) 16px 2.5rem; }
+    .px.side { top: 1rem; }
+  }
   /* magenta is the talk.md sub-brand color */
   #proponi { --accent: var(--magenta); }
   #proponi .cta a:not(:hover) { color: var(--ink); }
@@ -99,7 +121,7 @@
   .cta a:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .5rem 1rem; margin-top: 2.5rem; }
   /* subgrid keeps headings and texts on shared rows, even when a heading wraps */
-  .cards div { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: .25rem; border-top: 3px solid var(--accent); padding-top: .75rem; }
+  .cards div { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: .25rem; border-top: 3px solid var(--magenta); padding-top: .75rem; }
   .cards h3 { font-size: 1rem; text-transform: uppercase; }
   .cards p { margin: 0 0 1.5rem; font-size: 1rem; text-wrap: wrap; }
   .links { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin-top: 2rem; padding: 0; list-style: none; }
@@ -111,8 +133,9 @@
 </head>
 <body>
 <header class="hero">
-  <svg class="px top" aria-hidden="true"><use href="icons.svg#px"/></svg>
-  <svg class="px bottom" aria-hidden="true"><use href="icons.svg#px"/></svg>
+  <div class="px col left" aria-hidden="true"></div>
+  <div class="px col right" aria-hidden="true"></div>
+  <div class="px side" data-shape="side" aria-hidden="true"></div>
   <h1>
     <img class="logo" src="logo.svg" alt="Mantova Dev" width="1311" height="177">
   </h1>
@@ -137,6 +160,7 @@
 
 <main>
   <section id="chi-siamo">
+    <div class="px side left" data-shape="side" aria-hidden="true"></div>
     <p class="label">chi-siamo.md</p>
     <h2>Chi siamo</h2>
     <p>Siamo una community locale nata per creare momenti di incontro informali tra chi si interessa di informatica, software e tecnologia: per lavoro, per studio o per semplice curiosità.</p>
@@ -144,6 +168,7 @@
   </section>
 
   <section id="cosa-facciamo">
+    <div class="px side" data-shape="side" aria-hidden="true"></div>
     <p class="label">cosa-organizziamo.md</p>
     <h2>Cosa organizziamo</h2>
     <div class="cards">
@@ -164,6 +189,7 @@
   </section>
 
   <section id="proponi">
+    <div class="px side left" data-shape="side" aria-hidden="true"></div>
     <p class="label">proponi-un-talk.md</p>
     <h2>Vuoi proporre un talk?</h2>
     <p>Chiunque può proporre un intervento, a qualsiasi livello di esperienza: un'idea, una demo, la retrospettiva di un progetto o anche solo uno spunto di discussione. Non servono slide perfette, basta un contenuto utile o che faccia riflettere.</p>
@@ -174,5 +200,65 @@
   </section>
 </main>
 
+<script>
+  // Each square starts turning magenta at its own scroll point (--o, up to .75) and takes .25 of the
+  // scroll (--p, 0 to 1) to finish, so all are teal at the top and all magenta at the bottom.
+  const addSquare = (group, x, y) => {
+    const square = document.createElement('i');
+    square.style.cssText = `--x:${x}; --y:${y}; --t:${3 + Math.random() * 4}s; --d:${-Math.random() * 7}s; --o:${Math.random() * .75}`;
+    group.append(square);
+  };
+
+  // Phone bands: random variants of one shape (# = square), so no two match.
+  const band = [
+    '..........####################',
+    '.....#....#.....##############',
+    '..#.......#..#.......#####.###',
+  ];
+  const filled = (x, y) => band[y]?.[x] === '#';
+  const nearFilled = (x, y) => filled(x - 1, y) || filled(x + 1, y) || filled(x, y - 1) || filled(x, y + 1);
+  for (const group of document.querySelectorAll('.px.side')) {
+    group.style.cssText = `--cols:${band[0].length}; --rows:${band.length}`;
+    band.forEach((row, y) => [...row].forEach((_, x) => {
+      // keep most squares, drop a few, and grow a few next to existing ones
+      if (filled(x, y) ? Math.random() > .85 : !(nearFilled(x, y) && Math.random() < .2)) return;
+      addSquare(group, x, y);
+    }));
+  }
+
+  // Desktop columns: sized to the window, so rebuilt on resize; denser at the corners and the window edge.
+  const fillColumns = () => {
+    const margin = document.querySelector('main section').getBoundingClientRect().left;
+    for (const group of document.querySelectorAll('.px.col')) {
+      group.replaceChildren();
+      group.style.cssText = '--cols:1; --rows:1';
+      const s = group.offsetWidth; // the square size set by the CSS; 0 while hidden on phones
+      if (!s) continue;
+      const cols = Math.min(14, Math.floor(margin / s) - 2); // keep two squares of air next to the text
+      const rows = Math.ceil(innerHeight / s);
+      group.style.cssText = `--cols:${cols}; --rows:${rows}`;
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        const v = Math.min(y, rows - 1 - y) / (rows / 2); // 0 at the top and bottom, 1 at mid-height
+        const h = x / cols;                                // 0 at the window edge, 1 next to the text
+        if (Math.random() < .85 * ((1 - v) ** 2.5 + .04) * (1 - h) ** 1.5) addSquare(group, x, y);
+      }
+    }
+  };
+  fillColumns();
+  let resizing;
+  addEventListener('resize', () => { clearTimeout(resizing); resizing = setTimeout(fillColumns, 150); });
+
+  const root = document.documentElement;
+  const progress = () => root.style.setProperty('--p', Math.min(1, scrollY / Math.max(1, root.scrollHeight - innerHeight)));
+  let queued = false;
+  addEventListener('scroll', () => {
+    // at most one update per frame: the desktop columns hold a few hundred squares
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; progress(); });
+  }, { passive: true });
+  addEventListener('resize', progress);
+  progress();
+</script>
 </body>
 </html>
