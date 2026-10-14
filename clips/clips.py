@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""clips.py: Mantova Dev clipping pipeline, one command-line tool.
+"""clips.py: clipping pipeline for talk recordings, one command-line tool.
 
 Standard library only. Runs on Python 3.9. Needs ffmpeg (with libass) and
 whisper-cli on PATH. See clips/README.md for the overview and the SKILL.md files
@@ -15,6 +15,7 @@ Subcommands:
   status      print each candidate: range, edges, preview, text
   cut         cut a chosen clip and align its words for the captions
   tighten     shorten long pauses and drop stretches inside a cut clip
+  edit        write a timeline to fine-tune the cut in a video editor (optional)
   burn        render the final vertical clip with captions
   cover       draw a cover still for a finished clip
   join        join finished clips (any events) and an end card into a montage
@@ -31,6 +32,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from typing import NoReturn, Optional
 
 # ---------------------------------------------------------------- tuning
@@ -40,7 +42,6 @@ from typing import NoReturn, Optional
 # word's end is clamped to the earliest of: its own raw end, the next word's
 # start, and its own start + 1.5s.
 WORD_END_CLAMP_MS = 1500.0
-LANGUAGE = "it"         # whisper language of the talks
 # transcribe / render / status: a sentence repeated this many times in a row is flagged as
 # likely invented (whisper loops over noise, applause or a pause).
 SUSPECT_REPEAT = 3
@@ -106,10 +107,6 @@ DROP_TIMES_RE = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$")  # --drop "ID=1
 # Sound between two words that no word covers: a hesitation whisper left out, or speech
 # past the last word. Reported, never cut on its own.
 UNTRANSCRIBED_MIN_S = 0.7   # less is often a long word (numbers: "494") whose end is estimated short
-# tighten --fillers: whisper leaves out hesitations unless its prompt is full of them. That
-# second pass only locates them; the captions keep the words file.
-FILLER_PROMPT = "Ehm, allora, eee... cioè, mmh, ehm, praticamente eh, insomma... eee, mmm."
-FILLER_RE = re.compile(r"^(?!e$)(e+h*m*|m+h*|u+h*m+)$")  # not "e", the conjunction
 FILLER_KEEP = 0.05          # left before the next word
 
 # burn: loudness, in LUFS (the loudness unit the platforms normalize to; -14 is what
@@ -125,7 +122,6 @@ LOGO_W = 560             # logo width and top offset on the canvas
 LOGO_Y = 250
 MAX_VIDEO_H = 920        # tallest picture that leaves room for captions and link
 CAPTION_GAP = 55         # between the picture and the captions
-FOOTER = "https://mantova.dev"   # static text at the bottom of every clip
 
 # join: montage frame rate, audio fades at each join, and the end card layout.
 MONTAGE_FPS = 30
@@ -149,23 +145,34 @@ COVER_LINE_STEP = 140
 COVER_MAX_LINES = 3
 COVER_MAX_CHARS = 12     # "MANTOVA DEV" at size 130 is ~910 px wide
 
-# Aeonik Pro is the Mantova Dev brand font. It is proprietary, so it is not in the repo:
-# it must be installed on the machine. If it is missing, libass silently falls back to
-# a default font; pass --font to pick another one.
-DEFAULT_STYLE = {
-    "font": "Aeonik Pro Black",
-    "footer_font": "Aeonik Pro Bold",
-    "footer_size": 56,
-    "footer_margin_v": 425,
-    "background": "041917",      # canvas colour (brand dark), RRGGBB
-    "size": 68,                  # caption font size on the 1080x1920 canvas
-    "primary": "&H00FFFFFF",     # ASS colours are &HAABBGGRR
-    "active": "&H00CFE003",      # highlighted word: Mantova Dev turquoise #03E0CF
-    "outline_colour": "&H00000000",
-    "outline": 4,
-    "shadow": 2,
-    "active_scale": 100,         # percent
-    "uppercase": True,
+# The built-in look and language. A preset, presets/<name>/preset.json, overrides any of
+# these keys ("style" key by key); glossary and logo are files in the preset folder. Fonts
+# must be installed on the machine: if one is missing, libass silently uses a default font.
+PRESET = {
+    "language": "en",            # whisper language of the talks
+    # tighten --fillers: whisper leaves out hesitations unless its prompt is full of them.
+    # That second pass only locates them (words matching the pattern, lower case); the
+    # captions keep the words file.
+    "filler_prompt": "Um, uh, so, um, like, you know, uh, er, hmm, um.",
+    "filler_pattern": r"^(u+h*m*|h*m+|e+r+m*)$",
+    "glossary": None,            # names whisper keeps getting wrong, see load_glossary
+    "logo": None,                # image on top of every clip, cover and end card
+    "footer": "",                # static text at the bottom of every clip, and the end card's link
+    "style": {
+        "font": "Sans Bold",
+        "footer_font": "Sans Bold",
+        "sub_font": "Sans",          # end card subtitle
+        "footer_size": 56,
+        "footer_margin_v": 425,
+        "background": "111111",      # canvas colour, RRGGBB
+        "size": 68,                  # caption font size on the 1080x1920 canvas
+        "primary": "&H00FFFFFF",     # ASS colours are &HAABBGGRR
+        "active": "&H003FD2FF",      # highlighted word, footer, accent lines
+        "outline": 4,
+        "shadow": 2,
+        "active_scale": 100,         # percent
+        "uppercase": True,
+    },
 }
 
 
@@ -177,8 +184,47 @@ def fail(msg: str) -> NoReturn:
 
 
 def repo_root() -> Path:
-    # this file lives at <repo>/clips/clips.py
-    return Path(__file__).resolve().parents[1]
+    """The folder of this file: work/, models/ and presets/ live in it."""
+    return Path(__file__).resolve().parent
+
+
+def preset_dir(args, root: Path, work_dir: Optional[Path]) -> Optional[Path]:
+    """--preset, else the one ingest recorded for the event (for join, the first piece's
+    event). A bare name is a folder in presets/."""
+    name = args.preset
+    if not name:
+        if work_dir is None:
+            first = load_json(root / "work" / args.montage / "montage.json")["pieces"][0]
+            work_dir = work_dir_for(root, first.partition(":")[0])
+        info = work_dir / "ingest.json"
+        name = info.is_file() and load_json(info).get("preset")
+    if not name:
+        return None
+    folder = root / "presets" / name if "/" not in name else Path(name).resolve()
+    if not (folder / "preset.json").is_file():
+        fail(f"no preset.json in {folder}")
+    return folder
+
+
+def load_preset(folder: Path):
+    """Overlay folder/preset.json on PRESET."""
+    given = load_json(folder / "preset.json")
+    unknown = (set(given) - set(PRESET)) | (set(given.get("style", {})) - set(PRESET["style"]))
+    if unknown:
+        fail(f"{folder / 'preset.json'}: unknown keys: {', '.join(sorted(unknown))}")
+    PRESET["style"].update(given.pop("style", {}))
+    PRESET.update(given)
+    for key in ("glossary", "logo"):
+        if PRESET[key]:
+            PRESET[key] = folder / PRESET[key]
+
+
+def logo_input():
+    """ffmpeg input arguments for the preset's logo; without one, a transparent pixel, so
+    the filter graphs stay the same."""
+    if PRESET["logo"]:
+        return ["-i", str(PRESET["logo"])]
+    return ["-f", "lavfi", "-i", "color=c=black@0:s=2x2:d=0.04,format=rgba"]
 
 
 def run(cmd, **kwargs):
@@ -188,7 +234,7 @@ def run(cmd, **kwargs):
 
 
 def work_dir_for(root: Path, event: str, override: Optional[str] = None) -> Path:
-    return Path(override).resolve() if override else root / "clips" / "work" / event
+    return Path(override).resolve() if override else root / "work" / event
 
 
 def load_json(path: Path):
@@ -293,7 +339,7 @@ def cmd_ingest(args, root: Path, work_dir: Path):
     if abs(duration - source_duration) > 1.0:
         fail(f"audio.wav lasts {duration:.1f}s, the source {source_duration:.1f}s: try another --audio-track")
     save_json(work_dir / "ingest.json", {"source": str(source), "audio_track": args.audio_track,
-                                         "duration": round(duration, 2)})
+                                         "duration": round(duration, 2), "preset": args.preset})
     print(f"Wrote {out_mp4} and {out_wav} ({duration:.1f}s)")
 
 
@@ -397,8 +443,8 @@ def cmd_transcribe(args, root: Path, work_dir: Path):
     whisper fragments the segments, loses punctuation and invents text over silence."""
     raw_json = work_dir / "transcript.raw.json"
     if not args.compact_only:
-        vad_model = root / "clips" / "models" / "ggml-silero-v5.1.2.bin"
-        if run(["whisper-cli", "-m", str(default_model(root)), "-l", LANGUAGE, "-ojf",
+        vad_model = root / "models" / "ggml-silero-v5.1.2.bin"
+        if run(["whisper-cli", "-m", str(default_model(root)), "-l", PRESET["language"], "-ojf",
                 "-of", str(work_dir / "transcript.raw"), "-f", str(work_dir / "audio.wav"),
                 "--vad", "--vad-model", str(vad_model)]).returncode:
             fail("whisper-cli failed")
@@ -639,7 +685,7 @@ EDGE_KINDS = {
 
 
 def default_model(root: Path) -> Path:
-    return root / "clips" / "models" / "ggml-large-v3-turbo.bin"
+    return root / "models" / "ggml-large-v3-turbo.bin"
 
 
 def edge_window(work_dir: Path, t0: float, t1: float, model: Path):
@@ -852,7 +898,7 @@ def cmd_status(args, root: Path, work_dir: Path):
 def cmd_cut(args, root: Path, work_dir: Path):
     """Cut each clip from source.mp4 and align its words for the captions (glossary applied)."""
     cands = {c["id"]: c for c in load_json(work_dir / "highlights.json")["candidates"]}
-    glossary = load_glossary(root)
+    glossary = load_glossary()
     for cid in clip_ids(args, work_dir):
         final, base = clip_paths(work_dir, cid)
         final.mkdir(parents=True, exist_ok=True)
@@ -949,7 +995,7 @@ def dtw_words(model: Path, wav: Path, raw_prefix: Path, prompt: str = ""):
     """Words with DTW start times for a 16 kHz mono wav, in seconds from its start.
     No VAD on purpose: with VAD, token times lose the removed silence. DTW needs flash
     attention off. Writes <raw_prefix>.json."""
-    proc = run(["whisper-cli", "-m", str(model), "-l", LANGUAGE, "-ojf",
+    proc = run(["whisper-cli", "-m", str(model), "-l", PRESET["language"], "-ojf",
                 "-dtw", dtw_preset(model), "-nfa", "-of", str(raw_prefix), "-f", str(wav)]
                + (["--prompt", prompt] if prompt else []),
                capture_output=True, text=True)
@@ -964,10 +1010,12 @@ def clip_paths(work_dir: Path, clip_id: int):
     return final, base
 
 
-def load_glossary(root: Path):
-    """[(wrong words, right text)] from clips/config/glossary.tsv, longest first: names
+def load_glossary():
+    """[(wrong words, right text)] from the preset's glossary, longest first: names
     whisper keeps getting wrong, fixed in every words file cut writes."""
-    lines = (root / "clips" / "config" / "glossary.tsv").read_text(encoding="utf-8").splitlines()
+    if not PRESET["glossary"]:
+        return []
+    lines = PRESET["glossary"].read_text(encoding="utf-8").splitlines()
     entries = [(wrong.split(), right) for wrong, _, right in
                (line.partition("\t") for line in lines if line.strip() and not line.startswith("#"))]
     return [([norm_word(w) for w in wrong], right) for wrong, right in sorted(entries, key=lambda e: -len(e[0]))]
@@ -1094,8 +1142,8 @@ def plan_fillers(base: Path, model: Path, words, quiet_runs, fps, video_start):
     wav = Path(str(base) + ".fillers.wav")
     run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(base.with_suffix(".mp4")),
          "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
-    found = [w for w in dtw_words(model, wav, Path(str(base) + ".fillers"), FILLER_PROMPT)
-             if FILLER_RE.match(norm_word(w["w"]))]
+    found = [w for w in dtw_words(model, wav, Path(str(base) + ".fillers"), PRESET["filler_prompt"])
+             if re.match(PRESET["filler_pattern"], norm_word(w["w"]))]
     wav.unlink()
     cuts = []
     for filler in found:
@@ -1376,6 +1424,165 @@ def tightened_inputs(base: Path, clip: Path, words):
             remap_words(words, keeps, plan["fps"], plan["video_start"], dropped_words(plan["cuts"])))
 
 
+# ------------------------------------------------------------------ edit (fine-tune in a video editor)
+
+# The proxy holds this much of the recording before and after the cut, so an edge can be
+# dragged out in the editor (to finish a word the cut lands in). No words there: no captions.
+EDIT_PAD = 5.0
+
+
+def edit_origin(cut) -> float:
+    """Source time of the proxy's first frame."""
+    return round(max(0.0, cut["start"] - EDIT_PAD), 2)
+
+
+def otio_timeline(name, items, metadata):
+    """An OpenTimelineIO timeline, as plain JSON: items (file, first frame, end frame, frames
+    in the file, fps) one after the other on V1 and A1."""
+    def rt(value, fps):
+        return {"OTIO_SCHEMA": "RationalTime.1", "rate": fps, "value": float(value)}
+
+    def tr(start, duration, fps):
+        return {"OTIO_SCHEMA": "TimeRange.1", "start_time": rt(start, fps), "duration": rt(duration, fps)}
+
+    def track(kind, track_name):
+        return {"OTIO_SCHEMA": "Track.1", "name": track_name, "kind": kind, "metadata": {}, "effects": [],
+                "markers": [], "source_range": None,
+                "children": [{"OTIO_SCHEMA": "Clip.1", "name": f"{name} {n}", "metadata": {}, "effects": [],
+                              "markers": [], "source_range": tr(a, b - a, fps),
+                              "media_reference": {"OTIO_SCHEMA": "ExternalReference.1", "name": path.name,
+                                                  "metadata": {}, "target_url": path.resolve().as_uri(),
+                                                  "available_range": tr(0, frames, fps)}}
+                             for n, (path, a, b, frames, fps) in enumerate(items, 1)]}
+    return {"OTIO_SCHEMA": "Timeline.1", "name": name, "metadata": {"clips": metadata},
+            "global_start_time": rt(0, items[0][4]),
+            "tracks": {"OTIO_SCHEMA": "Stack.1", "name": "tracks", "metadata": {}, "effects": [], "markers": [],
+                       "source_range": None, "children": [track("Video", "V1"), track("Audio", "A1")]}}
+
+
+def captions_srt(words) -> str:
+    """Plain captions, chunked as burn chunks them, for the proxy."""
+    chunks = make_chunks(words)
+    blocks = []
+    for n, chunk in enumerate(chunks):
+        end = chunk[-1]["e"] + LAST_WORD_HOLD
+        if n + 1 < len(chunks):
+            end = min(end, chunks[n + 1][0]["s"])
+        text = " ".join(display(w["w"], PRESET["style"]) for w in chunk)
+        blocks.append(f"{n + 1}\n{srt_time(chunk[0]['s'])} --> {srt_time(end)}\n{text}\n")
+    return "\n".join(blocks)
+
+
+def cmd_edit(args, root: Path, work_dir: Path):
+    """For each cut clip: final/clip_<id>.edit.mp4, the recording from EDIT_PAD before the cut
+    to EDIT_PAD after it with the captions burned in, and final/clip_<id>.otio, a timeline
+    of it holding the cut and the tighten plan, to open in a video editor. An export of the
+    edited timeline to final/clip_<id>.edited.otio is what burn uses then."""
+    cands = {c["id"]: c for c in load_json(work_dir / "highlights.json")["candidates"]}
+    for clip_id in clip_ids(args, work_dir):
+        final, base = clip_paths(work_dir, clip_id)
+        cut = cands[clip_id]["cut"]
+        timeline, edited = Path(str(base) + ".otio"), Path(str(base) + ".edited.otio")
+        if edited.is_file() and timeline.is_file() and edited_is_stale(timeline, cut):
+            fail(f"clip {clip_id}: the cut moved, so {edited.name} no longer fits the new proxy. Delete or "
+                 "rename it (it holds the edits made in the editor), then run edit again.")
+        clip = base.with_suffix(".mp4")
+        fps, video_start, frames = ffprobe_video(clip)
+        keeps = [(0, frames)]
+        plan_path = Path(str(base) + ".tighten.json")
+        if plan_path.is_file():
+            plan = load_json(plan_path)
+            keeps = keep_ranges(plan["cuts"], plan["frames"])
+        origin = edit_origin(cut)
+        shift = cut["start"] - origin
+        offset = round(shift * fps)
+        words = [dict(w, s=w["s"] + shift, e=w["e"] + shift) for w in read_words(Path(str(base) + ".words.tsv"))]
+        srt_name, proxy_name = f"clip_{clip_id}.edit.srt", f"clip_{clip_id}.edit.mp4"
+        (final / srt_name).write_text(captions_srt(words), encoding="utf-8")
+        # Run inside final/ so the subtitles filter gets a bare file name (no escaping).
+        if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-ss", f"{origin:.2f}", "-t", f"{cut['end'] + EDIT_PAD - origin:.2f}",
+                "-i", str((work_dir / "source.mp4").resolve()),
+                "-vf", f"scale=-2:540,subtitles={srt_name}:force_style='FontSize=20,Outline=2,MarginV=24'",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", proxy_name], cwd=final).returncode:
+            fail(f"ffmpeg failed rendering the proxy of clip {clip_id}")
+        proxy = final / proxy_name
+        proxy_frames = ffprobe_video(proxy)[2]
+        save_json(timeline, otio_timeline(f"{work_dir.name} clip {clip_id}",
+                                          [(proxy, a + offset, b + offset, proxy_frames, fps) for a, b in keeps],
+                                          {"origin": origin, "cut": [cut["start"], cut["end"]]}))
+        print(f"Wrote {proxy} and {timeline}: open the .otio in the editor, export it as {edited.name}")
+
+
+def otio_ranges(path: Path, name: str):
+    """The edited timeline's cut: [(file, start s, end s)] of its audio track, in order. The
+    audio is the cut: a drag that moved the video alone cannot put picture and speech apart.
+    name: what the timeline is, for the warnings."""
+    ranges = {}
+    for track in load_json(path)["tracks"]["children"]:
+        found = []
+        for c in track["children"]:
+            if not c["OTIO_SCHEMA"].startswith("Clip."):
+                continue   # a gap: left out, as if closed
+            # Clip.1 has one media_reference; Clip.2 (Resolve's export) a dict of them.
+            ref = c.get("media_reference") or c["media_references"][c["active_media_reference_key"]]
+            url = ref["target_url"]
+            start, duration = c["source_range"]["start_time"], c["source_range"]["duration"]
+            found.append((unquote(urlparse(url).path) if url.startswith("file:") else url,
+                          start["value"] / start["rate"], (start["value"] + duration["value"]) / duration["rate"]))
+        ranges.setdefault(track["kind"], found)
+    if not ranges.get("Audio"):
+        fail(f"{path}: no audio track with clips in it")
+    if ranges.get("Video") != ranges["Audio"]:
+        print(f"warning: {name}: the video and audio tracks of {path.name} differ; the audio is used")
+    print(f"{name}: using the edited timeline {path.name}")
+    return ranges["Audio"]
+
+
+def edited_is_stale(timeline: Path, cut) -> bool:
+    """True when the cut moved since edit wrote the timeline (and its proxy)."""
+    return load_json(timeline)["metadata"]["clips"]["cut"] != [cut["start"], cut["end"]]
+
+
+def edited_inputs(work_dir: Path, clip_id, base: Path, cut, words):
+    """(clip, words) for burn from the edited timeline, final/clip_<id>.edited.otio: its
+    audio ranges cut from the recording into clip_<id>.edited.mp4, and the words moved onto
+    it. None when there is no edited timeline."""
+    edited = Path(str(base) + ".edited.otio")
+    if not edited.is_file():
+        return None
+    timeline = Path(str(base) + ".otio")
+    if edited_is_stale(timeline, cut):
+        fail(f"clip {clip_id}: the cut moved after edit, so {edited.name} no longer fits. Rename it (it "
+             "holds the edits made in the editor), run edit again, redo the edits and export again.")
+    origin = load_json(timeline)["metadata"]["clips"]["origin"]
+    proxy = Path(str(base) + ".edit.mp4")
+    fps, video_start, frames = ffprobe_video(proxy)
+    keeps = [(round(a * fps), round(b * fps)) for _, a, b in otio_ranges(edited, f"clip {clip_id}")]
+    shift = cut["start"] - origin
+    first, last = shift, cut["end"] - origin
+    for a, b in keeps:
+        for lo, hi in ((a / fps, min(b / fps, first)), (max(a / fps, last), b / fps)):
+            if hi - lo > 0.1:
+                print(f"  warning: {clock(lo)}-{clock(hi)} in the proxy is outside the cut: no captions there. "
+                      "To caption it, move the edge with choose, then cut --force and edit again.")
+    words = [dict(w, s=w["s"] + shift, e=w["e"] + shift) for w in words]
+    inside = lambda t: any(video_start + a / fps <= t < video_start + b / fps for a, b in keeps)
+    gone = {i for i, w in enumerate(words) if not inside(w["s"])}
+    final = base.parent
+    graph_name, out_name = f"clip_{clip_id}.edited.graph", f"clip_{clip_id}.edited.mp4"
+    (final / graph_name).write_text(tighten_graph(keeps, fps, video_start), encoding="utf-8")
+    # The same stretch of the recording as the proxy, so frame numbers match.
+    if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{origin:.2f}",
+            "-t", f"{frames / fps:.3f}", "-i", str((work_dir / "source.mp4").resolve()),
+            "-/filter_complex", graph_name, "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_name], cwd=final).returncode:
+        fail(f"ffmpeg failed cutting the edited timeline of clip {clip_id}")
+    return final / out_name, remap_words(words, keeps, fps, video_start, gone)
+
+
 # ------------------------------------------------------------------ burn
 
 def make_chunks(words):
@@ -1402,8 +1609,8 @@ def display(word: str, style) -> str:
 
 def ass_header(*styles) -> str:
     """An .ass file header for the vertical canvas. Each style is (name, font, size, colour,
-    outline, shadow, alignment, margin_v). Aeonik Pro Bold is not a family of its own but
-    the bold of Aeonik Pro, so a font name ending in " Bold" sets the bold flag instead."""
+    outline, shadow, alignment, margin_v). A bold is often not a family of its own (Aeonik
+    Pro Bold is the bold of Aeonik Pro), so a font name ending in " Bold" sets the bold flag."""
     lines = [f"Style: {name},{font.removesuffix(' Bold')},{size},{colour},{colour},&H00000000,&H80000000,"
              f"{-1 if font.endswith(' Bold') else 0},0,0,0,100,100,0,0,1,{outline},{shadow},{align},60,60,{margin_v},1"
              for name, font, size, colour, outline, shadow, align, margin_v in styles]
@@ -1479,17 +1686,18 @@ def picture_height(width: int, height: int) -> int:
     return video_h
 
 
-def _burn_one(root, work_dir, clip_id, crop):
+def _burn_one(root, work_dir, clip_id, crop, cut):
     final, base = clip_paths(work_dir, clip_id)
-    clip, words = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
-    style = DEFAULT_STYLE
+    words = read_words(Path(str(base) + ".words.tsv"))
+    clip, words = (edited_inputs(work_dir, clip_id, base, cut, words)
+                   or tightened_inputs(base, base.with_suffix(".mp4"), words))
+    style = PRESET["style"]
     width, height = ffprobe_size(clip)
     encode = ["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
               "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
 
-    # Vertical 1080x1920: brand background, logo on top, the (optionally cropped) picture
-    # at full width, captions in the free space below it, link at the bottom.
-    logo = root / "clips" / "config" / "brand" / "logo-dark-bg.png"
+    # Vertical 1080x1920: background, logo on top, the (optionally cropped) picture at full
+    # width, captions in the free space below it, footer at the bottom.
     crop_filter = "null"
     if crop:
         crop_filter = f"crop={crop}"
@@ -1504,7 +1712,7 @@ def _burn_one(root, work_dir, clip_id, crop):
         print(f"warning: clip {clip_id} is {duration:.0f} s, over {TOO_LONG_S:.0f} s. Drop stretches with tighten first.")
     (final / ass_name).write_text(
         build_ass(words, style, caption_top=video_y + video_h + CAPTION_GAP,
-                  footer=FOOTER, duration=duration),
+                  footer=PRESET["footer"], duration=duration),
         encoding="utf-8-sig")
     graph = (
         f"[0:v]{crop_filter},scale={CANVAS_W}:{video_h}[v];"
@@ -1515,7 +1723,7 @@ def _burn_one(root, work_dir, clip_id, crop):
         f"[b]ass={ass_name}[out];"
         f"[0:a]{loudnorm_filter(clip)}[au]"
     )
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip.name, "-i", str(logo),
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip.name, *logo_input(),
            "-filter_complex", graph, "-map", "[out]", "-map", "[au]"] + encode + [out_name]
 
     # Run inside final/ so the ass filter gets a bare file name (no escaping needed).
@@ -1548,8 +1756,9 @@ def cmd_burn(args, root: Path, work_dir: Path):
     if args.crop and args.crop != "none":
         picture_height(*(int(x) for x in args.crop.split(":")[:2]))   # refuse before storing it
     crops = clip_crops(work_dir, args.crop, ids)
+    cands = {c["id"]: c for c in load_json(work_dir / "highlights.json")["candidates"]}
     for clip_id in ids:
-        _burn_one(root, work_dir, clip_id, crops[clip_id])
+        _burn_one(root, work_dir, clip_id, crops[clip_id], cands[clip_id]["cut"])
 
 
 def cmd_cover(args, root: Path, work_dir: Path):
@@ -1568,14 +1777,18 @@ def cmd_cover(args, root: Path, work_dir: Path):
         fail("give exactly one clip with --ids")
     clip_id = ids.pop()
     final, base = clip_paths(work_dir, clip_id)
-    clip, _ = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
+    if Path(str(base) + ".edited.otio").is_file():
+        clip = Path(str(base) + ".edited.mp4")   # cut by burn from the edited timeline
+        if not clip.is_file():
+            fail(f"clip {clip_id}: run burn first, it cuts {clip.name} from the edited timeline")
+    else:
+        clip, _ = tightened_inputs(base, base.with_suffix(".mp4"), read_words(Path(str(base) + ".words.tsv")))
     if not 0 <= args.at < ffprobe_duration(clip):
         fail(f"--at is past the end of {clip.name}")
     crop = clip_crops(work_dir, None, [clip_id])[clip_id]
     width, height = (int(x) for x in crop.split(":")[:2]) if crop else ffprobe_size(clip)
 
-    logo = root / "clips" / "config" / "brand" / "logo-dark-bg.png"
-    logo_w, logo_h = ffprobe_size(logo)
+    logo_w, logo_h = ffprobe_size(PRESET["logo"]) if PRESET["logo"] else (1, 0)
     logo_h = LOGO_W * logo_h // logo_w
     room = COVER_BLOCK_H - logo_h - COVER_LOGO_GAP - COVER_TITLE_GAP - len(lines) * COVER_LINE_STEP
     video_h = int(round(CANVAS_W * height / width / 2)) * 2
@@ -1584,7 +1797,7 @@ def cmd_cover(args, root: Path, work_dir: Path):
     picture_y = top + logo_h + COVER_LOGO_GAP
     title_y = picture_y + picture_h + COVER_TITLE_GAP
 
-    st = DEFAULT_STYLE
+    st = PRESET["style"]
     colour = "{\\c%s}" % st["active"]
     ass = ass_header(("Title", st["font"], COVER_TITLE_SIZE, st["primary"], 0, 0, 8, 0))
     ass += "".join(f"Dialogue: 0,{ass_time(0)},{ass_time(1)},Title,,0,0,0,,{{\\an8\\pos({CANVAS_W // 2},"
@@ -1600,7 +1813,7 @@ def cmd_cover(args, root: Path, work_dir: Path):
              f"[a][lg]overlay=(W-w)/2:{top}[b];"
              f"[b]ass={ass_name}")
     if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", str(args.at), "-i", clip.name,
-            "-i", str(logo), "-filter_complex", graph, "-frames:v", "1", out_name], cwd=final).returncode:
+            *logo_input(), "-filter_complex", graph, "-frames:v", "1", out_name], cwd=final).returncode:
         fail("ffmpeg failed drawing the cover")
     print(f"Wrote {final / out_name}")
 
@@ -1613,16 +1826,17 @@ def build_card(out_dir: Path, card, root: Path) -> Path:
     """card.mp4: CARD_S of brand background, logo, the card's lines (line "accent",
     default the last, in the accent colour), an optional subtitle and the link, with
     silent audio."""
-    st = DEFAULT_STYLE
+    st = PRESET["style"]
     lines = card["lines"]
     accent = card.get("accent", len(lines))
     events = [(CARD_LINES_Y + n * CARD_LINE_STEP, "Line", ("{\\c%s}" % st["active"] if n + 1 == accent else "") + text)
               for n, text in enumerate(lines)]
     if card.get("subtitle"):
         events.append((CARD_LINES_Y + len(lines) * CARD_LINE_STEP + 80, "Sub", card["subtitle"]))
-    events.append((CARD_LINK_Y, "Footer", card.get("link", FOOTER)))
+    if card.get("link", PRESET["footer"]):
+        events.append((CARD_LINK_Y, "Footer", card.get("link", PRESET["footer"])))
     ass = ass_header(("Line", st["font"], 100, st["primary"], 0, 0, 8, 0),
-                     ("Sub", "Aeonik Pro", 60, st["primary"], 0, 0, 8, 0),
+                     ("Sub", st["sub_font"], 60, st["primary"], 0, 0, 8, 0),
                      ("Footer", st["footer_font"], 76, st["active"], 0, 0, 8, 0))
     ass += "".join(f"Dialogue: 0,{ass_time(0)},{ass_time(CARD_S)},{name},,0,0,0,,{{\\an8\\pos({CANVAS_W // 2},{y})}}{text}\n"
                    for y, name, text in events)
@@ -1631,7 +1845,7 @@ def build_card(out_dir: Path, card, root: Path) -> Path:
              f"[0:v]scale={CARD_LOGO_W}:-1[lg];[bg][lg]overlay=(W-w)/2:{CARD_LOGO_Y}[b];"
              f"[b]ass=card.ass,fade=t=in:d={CARD_FADE}[v]")
     if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(root / "clips" / "config" / "brand" / "logo-dark-bg.png"),
+            *logo_input(),
             "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-filter_complex", graph,
             "-map", "[v]", "-map", "1:a", "-t", str(CARD_S), "-c:v", "libx264", "-crf", "18",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "card.mp4"], cwd=out_dir).returncode:
@@ -1642,20 +1856,45 @@ def build_card(out_dir: Path, card, root: Path) -> Path:
 def cmd_join(args, root: Path, work_dir):
     """Join finished clips (burned, so already equally loud) and an optional end card into
     clips/work/<slug>/<slug>.mp4, as listed in clips/work/<slug>/montage.json:
-    {"pieces": ["YYYY-MM-DD:id", ...], "card": {"lines": [...], "accent": n, "subtitle": "...", "link": "..."}}"""
-    out_dir = root / "clips" / "work" / args.montage
+    {"pieces": ["YYYY-MM-DD:id", ...], "card": {"lines": [...], "accent": n, "subtitle": "...", "link": "..."}}
+    Also writes <slug>.otio, a timeline of those files to rearrange in a video editor; an export
+    of it to <slug>.edited.otio is what join uses then, instead of the order in montage.json."""
+    out_dir = root / "work" / args.montage
     montage = load_json(out_dir / "montage.json")
     inputs = [work_dir_for(root, event) / "final" / f"clip_{cid}.final.mp4"
               for event, _, cid in (piece.partition(":") for piece in montage["pieces"])]
     if montage.get("card"):
         inputs.append(build_card(out_dir, montage["card"], root))
+    timeline, edited = out_dir / f"{args.montage}.otio", out_dir / f"{args.montage}.edited.otio"
+    videos = [ffprobe_video(c) for c in inputs]
+    frames = [[str(c.resolve()), video[2]] for c, video in zip(inputs, videos)]
+    if not edited.is_file():
+        save_json(timeline, otio_timeline(args.montage, [(c, 0, n, n, video[0]) for c, video, (_, n)
+                                                         in zip(inputs, videos, frames)], {"frames": frames}))
+        print(f"Wrote {timeline}: to rearrange it in a video editor, export it as {edited.name}")
+        segments = [(c, None) for c in inputs]
+    else:
+        if load_json(timeline)["metadata"]["clips"]["frames"] != frames:
+            fail(f"a piece or the piece list changed since {timeline.name} was written, so {edited.name} no "
+                 f"longer fits. Delete or rename it (it holds the edits made in the editor), then join again.")
+        segments = [(Path(path), (a, b)) for path, a, b in otio_ranges(edited, f"montage {args.montage}")]
     # Plain cuts: one frame rate, and a few milliseconds of audio fade each side of a join
-    # so it does not click.
+    # so it does not click. An edited piece is trimmed first; video half a frame early, so a
+    # frame timestamp never sits on a boundary.
     graph = ""
-    for n, clip in enumerate(inputs):
-        fade_out = ffprobe_duration(clip) - JOIN_FADE_OUT
-        graph += (f"[{n}:v]fps={MONTAGE_FPS},setsar=1[v{n}];[{n}:a]aresample=48000,afade=t=in:d={JOIN_FADE_IN},"
+    for n, (clip, span) in enumerate(segments):
+        vtrim = atrim = ""
+        duration = ffprobe_duration(clip)
+        if span:
+            a, b = span
+            half = 0.5 / MONTAGE_FPS
+            vtrim = f"trim=start={max(0.0, a - half):.6f}:end={b - half:.6f},setpts=PTS-STARTPTS,"
+            atrim = f"atrim=start={a:.6f}:end={b:.6f},asetpts=PTS-STARTPTS,"
+            duration = b - a
+        fade_out = duration - JOIN_FADE_OUT
+        graph += (f"[{n}:v]{vtrim}fps={MONTAGE_FPS},setsar=1[v{n}];[{n}:a]{atrim}aresample=48000,afade=t=in:d={JOIN_FADE_IN},"
                   f"afade=t=out:st={fade_out:.3f}:d={JOIN_FADE_OUT}[a{n}];")
+    inputs = [clip for clip, _ in segments]
     graph += "".join(f"[v{n}][a{n}]" for n in range(len(inputs))) + f"concat=n={len(inputs)}:v=1:a=1[v][a]"
     out = out_dir / f"{args.montage}.mp4"
     if run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *[a for c in inputs for a in ("-i", str(c))],
@@ -1671,7 +1910,7 @@ def cmd_join(args, root: Path, work_dir):
 # ==================================================================
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="clips.py", description="Mantova Dev clipping pipeline.")
+    parser = argparse.ArgumentParser(prog="clips.py", description="Clipping pipeline for talk recordings.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def command(name, func, help_text, ids=None):
@@ -1680,6 +1919,8 @@ def build_parser():
         if name != "join":
             p.add_argument("--event", required=True, help="Event date, YYYY-MM-DD.")
             p.add_argument("--work-dir", help=argparse.SUPPRESS)  # testing override for clips/work/<event>
+        p.add_argument("--preset", metavar="NAME_OR_DIR", help="Preset: a folder in clips/presets/, or a path. "
+                       "ingest records it, later commands for the event use it.")
         if ids:
             p.add_argument("--ids", help=ids)
         return p
@@ -1709,12 +1950,14 @@ def build_parser():
     p.add_argument("--drop", action="append", metavar="ID=WORDS",
                    help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\", or 3=12.4-14.5 in clip seconds.")
     p.add_argument("--fillers", action="store_true", help="Also cut hesitations (eh, ehm, mmh) between words.")
+    command("edit", cmd_edit, "Write a captioned proxy and a timeline to fine-tune the cut in a video editor: "
+            "final/clip_<id>.otio.", ids=chosen)
     p = command("burn", cmd_burn, "Render the final vertical clip with captions.", ids=chosen)
     p.add_argument("--crop", metavar="W:H:X:Y", help="Show only this part of the picture (stored; \"none\" clears it).")
     p = command("cover", cmd_cover, "Draw a cover still: final/clip_<id>.cover.png.", ids="The clip (one id).")
     p.add_argument("--at", type=float, required=True, help="Frame time in seconds, as the player shows the final clip.")
     p.add_argument("--title", action="append", required=True, metavar="LINE", help="A title line; repeat for more lines.")
-    p.add_argument("--accent", type=int, help="Line number shown in turquoise (default: the last).")
+    p.add_argument("--accent", type=int, help="Line number shown in the accent colour (default: the last).")
     p = command("join", cmd_join, "Join finished clips and an end card as listed in clips/work/<slug>/montage.json.")
     p.add_argument("--montage", required=True, metavar="SLUG", help="Montage name, e.g. chi-siamo.")
     return parser
@@ -1724,6 +1967,11 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     root = repo_root()
     work_dir = work_dir_for(root, args.event, args.work_dir) if hasattr(args, "event") else None
+    args.preset = preset_dir(args, root, work_dir)
+    if args.preset:
+        load_preset(args.preset)
+        # ingest.json keeps a bare name, so the event survives moving the repo
+        args.preset = args.preset.name if args.preset.parent == root / "presets" else str(args.preset)
     try:
         args.func(args, root, work_dir)
         sys.stdout.flush()

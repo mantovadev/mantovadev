@@ -9,12 +9,12 @@ It also joins finished clips into a montage.
 ## What it does
 
 1. `cut`: frame-accurate cut of the source, then a fresh transcription of the clip
-   for precise word timing, written to an editable words file with the glossary
-   (`clips/config/glossary.tsv`) applied.
+   for precise word timing, written to an editable words file with the preset's
+   glossary applied.
 2. `tighten` (optional): drops stretches the human agreed to lose and shortens long
    pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
-3. `burn`: the 1080x1920 clip in the Mantova Dev look (brand background, logo, the
-   picture at full width, word-by-word captions, `https://mantova.dev` at the bottom),
+3. `burn`: the 1080x1920 clip in the preset's look (background, logo, the picture at
+   full width, word-by-word captions, the footer text at the bottom),
    brought to a common loudness (-14 LUFS). Everything stays clear of the TikTok and
    Shorts UI (top ~230 px, bottom ~345 px, action buttons on the right).
 4. `cover`: a 1080x1920 still to upload as the post's cover (Instagram, TikTok,
@@ -50,7 +50,7 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
 
 3. Read the words file and fix what whisper mis-heard: jargon, acronyms ("cp" is
    "CPU"), flags. Edit the word, keep the times. A name it keeps getting wrong goes in
-   `clips/config/glossary.tsv` instead. Show the human the clip's text and ask for
+   the preset's `glossary.tsv` instead. Show the human the clip's text and ask for
    corrections.
 
 4. Tighten, when the clip is over 60 s or the human wants something out:
@@ -76,6 +76,21 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
      end are not `tighten`'s job: move them with `choose`, then `cut --force`.
    - Open `clip_<id>.tight.mp4` and ask about each splice.
 
+   Optional, when the human wants to fine-tune the cut by hand in a video editor:
+
+   ```
+   clips/clips.py edit --event <event> --ids <id>
+   ```
+
+   It writes `clip_<id>.otio`, a timeline of the cut and the tighten plan, on
+   `clip_<id>.edit.mp4`: the recording from 5 s before the cut to 5 s after it, with
+   plain captions. The human opens the `.otio` in their editor,
+   trims, deletes, drags edges into the extra seconds, and exports the timeline as
+   `clip_<id>.edited.otio` in the same folder. From then on `burn` and `cover` use that
+   export (the audio track decides the cut) instead of the tighten plan; delete it to
+   go back. After `choose` and `cut --force`, `burn` refuses an old export: rename it, run
+   `edit` again and redo the edits. A fixed word in the words file shows in the editor after `edit` runs again.
+
 5. Burn, with `--crop W:H:X:Y` if you decided one (it is stored; `none` clears it):
 
    ```
@@ -86,13 +101,9 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    or one late caption: edit the words file (for a tightened clip, find the word by its
    text; the player shows tightened times) and burn again. Repeat until approved.
 
-7. Propose the post text in the chat: Italian, informal, no hype, only what the clip
-   says and what `events/<event>/README.md` holds. Title and caption are about the
-   talk's topic, in plain words: no teaser, no striking numbers. Earlier `post.txt`
-   files in the delivery folder show the tone. A title of at most 60 characters,
-   a caption of 2 or 3 short sentences ending with an invitation to the next meetup and
-   `https://mantova.dev`, 5 to 8 hashtags (`#MantovaDev` `#Mantova` plus topic ones).
-   Name the speaker only if the event README does. Nothing dated.
+7. Propose the post text in the chat, as the preset's `conventions.md` says (no
+   preset conventions: ask the human for language and tone). Only what the clip says,
+   no hype, nothing dated.
 
 8. Cover. Propose a cover title with the post text: 1 to 3 short lines (at most 12
    characters each), the topic in a few words, not the post title verbatim. Then pick a
@@ -108,30 +119,13 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    ```
 
    Tile n of the sheet (from 0, row by row) is at n × 1.5 s. `--at` is in the final
-   clip's time, as its player shows it; `--accent` is the line in turquoise
+   clip's time, as its player shows it; `--accent` is the line in the accent colour
    (default the last). Open `clip_<id>.cover.png` and iterate until approved. For a
    montage, draw it from one of its pieces.
 
-9. Save the post outside the repo, in a folder of its own: ask where (default
-   `~/Movies/MD`) and ask before replacing an existing folder.
-
-   ```
-   YYYYMMDD-mantovadev-<slug>/   # today's date
-     video.mp4                   # the montage, with its end card
-     cover.png                   # clip_<id>.cover.png
-     post.txt                    # the approved text, as below
-   ```
-
-   ```
-   TITOLO
-   <title>
-
-   DIDASCALIA
-   <caption>
-
-   HASHTAG
-   <hashtags>
-   ```
+9. Save the post outside the repo, in a folder of its own, as the preset's
+   `conventions.md` says: the montage with its end card, the cover and the approved
+   text. Ask where, and ask before replacing an existing folder.
 
 10. Ask whether they want another clip; if so, back to `highlight-selection`.
 
@@ -153,6 +147,14 @@ Subtitle: a short payoff picked for each post with the human (e.g. "Game dev con
 Godot", "Vieni al prossimo incontro!"), or none.
 
 Pieces play in order, as plain cuts, at the same loudness. The end card shows
-the logo, the lines (the last in turquoise, or line `"accent": n`), the subtitle and the link (default
-`https://mantova.dev`) for 3 s. The result is `clips/work/<slug>/<slug>.mp4`. Pieces
+the logo, the lines (the last in the accent colour, or line `"accent": n`), the subtitle and the link
+(default the preset's footer) for 3 s. The result is `clips/work/<slug>/<slug>.mp4`. Pieces
 can be short (8 to 25 s each); keep the whole under 90 s and the middle brisk.
+
+Optional, to rearrange by hand: `join` also writes `clips/work/<slug>/<slug>.otio`, the
+finished pieces and the end card on one timeline. The human reorders, trims or drops
+pieces in their editor and exports it as `<slug>.edited.otio` in the same folder; from
+then on `join` follows that export (its audio track) instead of the order in
+`montage.json`. Delete it to go back. After a piece is burned again or the piece list
+changes, `join` refuses the old export. Work on a piece's own cut (edges past it,
+captions, crop) happens on that piece, with `edit` and `burn`.
