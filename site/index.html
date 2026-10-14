@@ -3,19 +3,54 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mantova Dev</title>
-<meta name="description" content="La tech community di Mantova per sviluppatori e appassionati. Un meetup gratuito al mese: talk, demo e networking.">
+<title>Mantova Dev | Developer community e meetup gratuiti a Mantova</title>
+<meta name="description" content="La tech community di Mantova per sviluppatori e appassionati. Meetup gratuiti con talk, demo e networking.">
+<link rel="canonical" href="https://mantova.dev/">
 <meta name="theme-color" content="#041917">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Mantova Dev">
 <meta property="og:url" content="https://mantova.dev/">
 <meta property="og:title" content="Mantova Dev">
-<meta property="og:description" content="La tech community per sviluppatori e appassionati. Un meetup gratuito al mese a Mantova.">
+<meta property="og:description" content="La tech community per sviluppatori e appassionati. Meetup gratuiti a Mantova.">
 <meta property="og:image" content="https://mantova.dev/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Logo di Mantova Dev con il motto: La tech community per sviluppatori e appassionati">
 <meta property="og:locale" content="it_IT">
 <meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "name": "Mantova Dev",
+      "url": "https://mantova.dev/"
+    },
+    {
+      "@type": "Organization",
+      "name": "Mantova Dev",
+      "url": "https://mantova.dev/",
+      "logo": "https://mantova.dev/apple-touch-icon.png",
+      "email": "mantovadev@gmail.com",
+      "address": { "@type": "PostalAddress", "addressLocality": "Mantova", "addressRegion": "MN", "addressCountry": "IT" },
+      "sameAs": [
+        "https://www.eventbrite.it/o/mantova-dev-121019352742",
+        "https://www.youtube.com/@MantovaDev",
+        "https://www.linkedin.com/company/mantovadev",
+        "https://www.instagram.com/mantovadev",
+        "https://www.tiktok.com/@mantova.dev",
+        "https://www.facebook.com/people/Mantova-Dev/61585731386115",
+        "https://github.com/mantovadev"
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
 <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
 <style>
   :root {
@@ -98,15 +133,7 @@
   h2, h3 { text-wrap: balance; }
   p { text-wrap: pretty; }
   section p { margin-top: 1rem; color: var(--muted); }
-  .chip {
-    display: inline-block;
-    margin-top: 2.5rem;
-    padding: .2rem .7rem;
-    background: var(--ink);
-    color: var(--bg);
-    font-weight: 700;
-  }
-  .tagline { margin-top: 1rem; font-size: clamp(1.75rem, 5vw, 2.75rem); line-height: 1.15; font-weight: 700; text-transform: uppercase; }
+  .tagline { margin-top: 2.5rem; font-size: clamp(1.75rem, 5vw, 2.75rem); line-height: 1.15; font-weight: 700; text-transform: uppercase; }
   .about { margin-top: 1rem; color: var(--muted); }
   .cta { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
   .hero .cta { justify-content: center; }
@@ -124,10 +151,12 @@
   .cards div { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: .25rem; border-top: 3px solid var(--magenta); padding-top: .75rem; }
   .cards h3 { font-size: 1rem; text-transform: uppercase; }
   .cards p { margin: 0 0 1.5rem; font-size: 1rem; text-wrap: wrap; }
-  .links { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; margin-top: 2rem; padding: 0; list-style: none; }
-  .links a { display: grid; place-items: center; width: 3rem; height: 3rem; border: 2px solid color-mix(in srgb, var(--accent) 45%, var(--bg)); color: var(--ink); }
-  .links a:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  .links svg { width: 1.6rem; height: 1.6rem; }
+  .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 1.25rem; margin-top: 1.5rem; }
+  .links ul { display: flex; padding: 0; list-style: none; }
+  .links a { display: flex; align-items: center; justify-content: center; gap: .45rem; min-width: 2.75rem; height: 2.75rem; padding-inline: .5rem; color: var(--ink); font-weight: 700; text-decoration: none; }
+  .links .socials a { color: var(--muted); }
+  .links a:hover { color: var(--accent); }
+  .links svg { width: 1.3rem; height: 1.3rem; }
   a:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 </style>
 </head>
@@ -140,22 +169,26 @@
     <img class="logo" src="logo.svg" alt="Mantova Dev" width="1311" height="177">
   </h1>
 
-  <p class="chip">Eventi gratuiti</p>
   <p class="tagline">La tech community per sviluppatori e appassionati</p>
-  <p class="about">Un meetup al mese a Mantova per developer, studenti, professionisti e curiosi.</p>
+  <p class="about">Meetup gratuiti a Mantova per developer, studenti, professionisti e curiosi.</p>
 
   <div class="cta">
-    <a href="https://www.eventbrite.com/cc/mantova-dev-4822410" target="_blank" rel="noopener">Prossimi eventi</a>
+    <a href="https://www.eventbrite.it/o/mantova-dev-121019352742" target="_blank" rel="noopener">Prossimi eventi</a>
     <a href="#proponi">Proponi un talk</a>
   </div>
-  <ul class="links">
-    <li><a href="https://t.me/+uESvpTqd1ZpmZGE0" target="_blank" rel="noopener" aria-label="Telegram" title="Telegram"><svg aria-hidden="true"><use href="icons.svg#telegram"/></svg></a></li>
-    <li><a href="https://www.linkedin.com/company/mantovadev" target="_blank" rel="noopener" aria-label="LinkedIn" title="LinkedIn"><svg aria-hidden="true"><use href="icons.svg#linkedin"/></svg></a></li>
-    <li><a href="https://www.youtube.com/@MantovaDev" target="_blank" rel="noopener" aria-label="YouTube" title="YouTube"><svg aria-hidden="true"><use href="icons.svg#youtube"/></svg></a></li>
-    <li><a href="https://www.instagram.com/mantovadev" target="_blank" rel="noopener" aria-label="Instagram" title="Instagram"><svg aria-hidden="true"><use href="icons.svg#instagram"/></svg></a></li>
-    <li><a href="https://www.facebook.com/people/Mantova-Dev/61585731386115" target="_blank" rel="noopener" aria-label="Facebook" title="Facebook"><svg aria-hidden="true"><use href="icons.svg#facebook"/></svg></a></li>
-    <li><a href="https://github.com/mantovadev/mantovadev" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg aria-hidden="true"><use href="icons.svg#github"/></svg></a></li>
-  </ul>
+  <div class="links">
+    <ul>
+      <li><a href="https://t.me/+uESvpTqd1ZpmZGE0" target="_blank" rel="noopener"><svg aria-hidden="true"><use href="icons.svg#telegram"/></svg>Telegram</a></li>
+      <li><a href="https://www.youtube.com/@MantovaDev" target="_blank" rel="noopener"><svg aria-hidden="true"><use href="icons.svg#youtube"/></svg>YouTube</a></li>
+      <li><a href="https://github.com/mantovadev/mantovadev" target="_blank" rel="noopener"><svg aria-hidden="true"><use href="icons.svg#github"/></svg>GitHub</a></li>
+    </ul>
+    <ul class="socials">
+      <li><a href="https://www.linkedin.com/company/mantovadev" target="_blank" rel="noopener" aria-label="LinkedIn" title="LinkedIn"><svg aria-hidden="true"><use href="icons.svg#linkedin"/></svg></a></li>
+      <li><a href="https://www.instagram.com/mantovadev" target="_blank" rel="noopener" aria-label="Instagram" title="Instagram"><svg aria-hidden="true"><use href="icons.svg#instagram"/></svg></a></li>
+      <li><a href="https://www.tiktok.com/@mantova.dev" target="_blank" rel="noopener" aria-label="TikTok" title="TikTok"><svg aria-hidden="true"><use href="icons.svg#tiktok"/></svg></a></li>
+      <li><a href="https://www.facebook.com/people/Mantova-Dev/61585731386115" target="_blank" rel="noopener" aria-label="Facebook" title="Facebook"><svg aria-hidden="true"><use href="icons.svg#facebook"/></svg></a></li>
+    </ul>
+  </div>
 </header>
 
 <main>
@@ -173,8 +206,8 @@
     <h2>Cosa organizziamo</h2>
     <div class="cards">
       <div>
-        <h3>Meetup mensili</h3>
-        <p>Un incontro al mese, gratuito e aperto a tutti. Basta iscriversi all'evento.</p>
+        <h3>Meetup</h3>
+        <p>Incontri gratuiti e aperti a tutti. Basta iscriversi all'evento e passare a trovarci.</p>
       </div>
       <div>
         <h3>Talk e discussioni</h3>

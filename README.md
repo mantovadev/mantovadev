@@ -2,7 +2,7 @@
 
 Community di riferimento a Mantova per informatica, software e tech.
 
-Meetup mensili, talk e networking per developer, studenti e appassionati.
+Meetup gratuiti, talk e networking per developer, studenti e appassionati.
 
 ## 👋 Chi siamo
 
