@@ -1,13 +1,13 @@
 # AGENTS.md
 
-Mantova Dev is a tech community in Mantova (Italy) with one meetup per month.
+Mantova Dev is a tech community in Mantova (Italy) that organizes free meetups.
 
 ## Layout
 
 - `events/YYYY-MM-DD/`: one folder per meetup. `README.md` in Italian, copied from `events/_template.md` (keep its section headings), plus talk materials.
 - `assets/`: brand assets. `assets/export-png.sh -o <dir>` exports PNGs from `assets/svg/`.
 - `clips/`: local pipeline that turns a meetup recording into short vertical clips. Start from `clips/README.md`. Each step is a skill in `clips/skills/<name>/`: read its `SKILL.md` before running its scripts. All run outputs go in the gitignored `clips/work/<event>/`. Ingest with `--preset mantovadev`.
-- `site/`: the mantova.dev landing page, in Italian. Plain static files with no build step; the host serves this folder as is, so every file the page uses must live inside it. Keep it timeless: no dates, times, venues or past events.
+- `site/`: the mantova.dev landing page, in Italian. Plain static files with no build step; the host serves this folder as is, so every file the page uses must live inside it. Keep it timeless: no dates, times, venues, event frequency or past events.
 
 ## Rules
 
