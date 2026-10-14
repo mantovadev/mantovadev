@@ -15,8 +15,13 @@ of the talk would silently lose the rest.
 ## How
 
 ```
-clips/clips.py ingest --event <event> --source /path/to/recording.mp4 [--audio-track <n>]
+clips/clips.py ingest --event <event> --source /path/to/recording.mp4 [--audio-track <n>] [--preset <name>]
 ```
+
+- `--preset` picks the look and language (a folder in `clips/presets/`, or a path).
+  It is recorded in `ingest.json`, and later commands for the event use it. Without
+  it, transcripts are in English. Mantova Dev events: `--preset mantovadev`; for
+  anything else, ask the human.
 
 - The source path is always given by the human.
 - If the stream list shows a mic-only track next to the full mix, prefer it: it

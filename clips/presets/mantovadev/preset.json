@@ -1,0 +1,15 @@
+{
+  "language": "it",
+  "filler_prompt": "Ehm, allora, eee... cioè, mmh, ehm, praticamente eh, insomma... eee, mmm.",
+  "filler_pattern": "^(?!e$)(e+h*m*|m+h*|u+h*m+)$",
+  "glossary": "glossary.tsv",
+  "logo": "logo.png",
+  "footer": "https://mantova.dev",
+  "style": {
+    "font": "Aeonik Pro Black",
+    "footer_font": "Aeonik Pro Bold",
+    "sub_font": "Aeonik Pro",
+    "background": "041917",
+    "active": "&H00CFE003"
+  }
+}

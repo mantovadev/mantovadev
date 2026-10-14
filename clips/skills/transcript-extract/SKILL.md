@@ -6,7 +6,7 @@
 
 ## What it does
 
-Runs `whisper-cli` (`large-v3-turbo`, Italian, Silero VAD) on the full audio and
+Runs `whisper-cli` (`large-v3-turbo`, the preset's language, Silero VAD) on the full audio and
 writes `clips/work/<event>/transcript.json`: punctuated sentence-like segments
 (`i`, `s`, `e`, `text`) and rough word times (`w`, `s`, `e`, `seg`). A few minutes for
 a one hour talk. `--compact-only` rebuilds `transcript.json` from the raw output
