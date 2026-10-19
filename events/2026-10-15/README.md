@@ -29,4 +29,5 @@ L'evento è gratuito, iscriviti su [Eventbrite](https://www.eventbrite.it/e/2002
 
 ## Risorse
 
-Materiali e registrazione verranno aggiunti dopo l'evento.
+- Registrazione: [YouTube](https://www.youtube.com/watch?v=OYlXOACwaH4)
+- Slide: [Il_Tablettone.pdf](./Il_Tablettone.pdf)
