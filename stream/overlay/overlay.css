@@ -29,7 +29,8 @@ body {
 .cards { display: flex; flex-direction: column; gap: 8px; }
 .cards .who { overflow: hidden; padding: 10px 20px; border-left: 3px solid transparent; background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--muted); font-size: 26px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; transition: color .8s, border-color .8s; }
 .cards .who.on { border-left-color: var(--magenta); color: var(--ink); }
-.cards .card { position: relative; flex: 1; min-height: 0; margin-top: 8px; }
+.cards .card { position: relative; flex: 1; min-height: 0; }
+.cards .who + .card { margin-top: 8px; }
 /* label line in Talk 4:3: TALK and the speakers */
 .card .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .card .meta .speaker { overflow: hidden; color: var(--muted); font-size: 26px; text-overflow: ellipsis; white-space: nowrap; }

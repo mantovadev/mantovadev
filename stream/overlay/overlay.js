@@ -45,12 +45,13 @@
       if (talk) box("card", L.card, `<div class="meta"><span class="label">Talk</span><span class="speaker ticker">${esc(names(talk))}</span></div><div class="title ticker">${esc(talk.title)}</div>${opt("sub ticker", talk.subtitle)}`);
       box("aside", L.aside, `<div>${logo}${link}</div>${qr}`);
     } else {
-      // the speaker card under the camera; in Panel, the list of names over it, the current one marked.
+      // the speaker card beside the video; in Panel, with several speakers, the list of names over it, the current one marked.
       // Without cards, the speakers go on the footer label.
       const speakers = talk?.speakers ?? [];
       const cards = speakers.map((p, n) => `<div class="person" data-i="${n}">${person(p)}</div>`).join("");
       if (L.card && speakers.length) box("card", L.card, cards);
-      if (L.cards && speakers.length) box("cards", L.cards, speakers.map((p, n) => `<div class="who" data-i="${n}">${esc(p.name)}</div>`).join("") + `<div class="card">${cards}</div>`);
+      const list = speakers.length > 1 ? speakers.map((p, n) => `<div class="who" data-i="${n}">${esc(p.name)}</div>`).join("") : "";
+      if (L.cards && speakers.length) box("cards", L.cards, `${list}<div class="card">${cards}</div>`);
       // with the speakers on cards, the label carries the date instead: 12 novembre 2026
       const when = new Date(`${event?.date}T12:00`).toLocaleDateString("it", { day: "numeric", month: "long", year: "numeric" });
       const label = talk ? [event.number && `#${esc(event.number)}`, L.card || L.cards ? when : esc(names(talk))].filter(Boolean).join(" · ") : "Mantova Dev";
