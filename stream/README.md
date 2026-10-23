@@ -14,6 +14,7 @@ OBS setup for streaming meetups on YouTube: brand overlays and a generated scene
 | Talk 4:3 | Speaker screen 4:3 at full height (1376x1032), side column with camera cropped 2:3, compact card with talk and speaker, logo, mantova.dev and QR |
 | Demo | Speaker screen (1536x864) and footer, with the speaker in its label |
 | Solo camera | Camera (1536x864) and footer, with the speaker in its label: introductions, Q&A |
+| Panel | Camera (1536x864), the speakers' names over the current one's card (in turn, 15 s each), and footer: discussions without slides |
 | Pausa | Filler: logo, "Torniamo tra poco", talks, mantova.dev and QR |
 | Fine | Filler: logo, "Grazie a tutti!", talks, mantova.dev and QR |
 

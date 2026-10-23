@@ -45,28 +45,34 @@
       if (talk) box("card", L.card, `<div class="meta"><span class="label">Talk</span><span class="speaker ticker">${esc(names(talk))}</span></div><div class="title ticker">${esc(talk.title)}</div>${opt("sub ticker", talk.subtitle)}`);
       box("aside", L.aside, `<div>${logo}${link}</div>${qr}`);
     } else {
-      // the speaker card under the camera; without a card, the speakers go on the footer label
-      if (L.card && talk?.speakers?.length) box("card", L.card, talk.speakers.map(person).join(""));
-      const label = talk ? [event.number && `#${esc(event.number)}`, !L.card && esc(names(talk))].filter(Boolean).join(" · ") : "Mantova Dev";
+      // the speaker card under the camera; in Panel, the list of names over it, the current one marked.
+      // Without cards, the speakers go on the footer label.
+      const speakers = talk?.speakers ?? [];
+      const cards = speakers.map((p, n) => `<div class="person" data-i="${n}">${person(p)}</div>`).join("");
+      if (L.card && speakers.length) box("card", L.card, cards);
+      if (L.cards && speakers.length) box("cards", L.cards, speakers.map((p, n) => `<div class="who" data-i="${n}">${esc(p.name)}</div>`).join("") + `<div class="card">${cards}</div>`);
+      // with the speakers on cards, the label carries the date instead: 12 novembre 2026
+      const when = new Date(`${event?.date}T12:00`).toLocaleDateString("it", { day: "numeric", month: "long", year: "numeric" });
+      const label = talk ? [event.number && `#${esc(event.number)}`, L.card || L.cards ? when : esc(names(talk))].filter(Boolean).join(" · ") : "Mantova Dev";
       const sub = talk?.subtitle ? `<span class="sub">${esc(talk.subtitle)}</span>` : "";
       const line = talk ? `<b>${esc(talk.title)}</b>${sub}` : "<b>La tech community per sviluppatori e appassionati</b>";
       box("band", L.band, `${logo}<div class="event"><div class="label">${label}</div><div class="line ticker">${line}</div></div>${link}${qr}`);
     }
     document.fonts.ready.then(fitText);
-    // with more speakers, the card shows one at a time and fades to the next every 15 s
-    const people = [...document.querySelectorAll(".card .person")];
-    people[0]?.classList.add("on");
+    // with more speakers, the cards take turns every 15 s: .on marks everything for speaker i
+    const count = talk?.speakers?.length ?? 0;
     let i = 0;
-    if (people.length > 1) rotation = setInterval(() => {
-      people[i].classList.remove("on");
-      i = (i + 1) % people.length;
-      people[i].classList.add("on");
+    const turn = () => document.querySelectorAll("[data-i]").forEach((el) => el.classList.toggle("on", el.dataset.i === String(i)));
+    turn();
+    if (count > 1) rotation = setInterval(() => {
+      i = (i + 1) % count;
+      turn();
     }, 15000);
   }
 
-  // one speaker's card: all of them are laid out stacked, so fitText can measure the hidden ones too
+  // one speaker's card content. The .person cards are laid out stacked, so fitText can measure the hidden ones too
   function person(p) {
-    return `<div class="person"><div class="name">${esc(p.name)}</div>${opt("role", p.role)}${opt("company", p.company)}<div class="bio fit">${esc(p.bio ?? "")}</div></div>`;
+    return `<div class="name">${esc(p.name)}</div>${opt("role", p.role)}${opt("company", p.company)}<div class="bio fit">${esc(p.bio ?? "")}</div>`;
   }
 
   // today's README from disk; on other days, a local page can't list folders, so it asks GitHub for the events/<date>/
@@ -87,7 +93,7 @@
       const front = (await readme.text()).match(/^---\r?\n([\s\S]*?)\r?\n---/);
       const data = front && window.jsyaml.load(front[1]);
       const valid = data?.talks?.length && data.talks.every((t) => t?.title && Array.isArray(t.speakers ?? []) && (t.speakers ?? []).every((p) => p?.name));
-      if (valid) return { ...data, today: date === today };
+      if (valid) return { ...data, date, today: date === today };
     } catch {
       // no network, or no README on disk yet: the generic overlay
     }
@@ -114,7 +120,8 @@
         const full = parseFloat(getComputedStyle(el).fontSize);
         let size = full;
         while (lines() > 1 && size > min) el.style.fontSize = `${--size}px`;
-        if (lines() > 1) el.style.fontSize = `${full}px`;
+        if (lines() > 1) el.style.fontSize = `${(size = full)}px`;
+        while (lines() > 2 && size > min) el.style.fontSize = `${--size}px`; // over two lines even at full size: shrink to two
       }
     }
     // shrink text that overflows its box
