@@ -11,6 +11,7 @@ talks:
         bio: Dal 2017 aiuta professionisti e aziende a semplificare file, email, agenda e metodi di lavoro. Ha scritto il libro L'arte di organizzare la scrittura online (Flaccovio Editore).
       - name: Elia Golfetto
         role: Notion Certified Consultant & Ambassador
+        company: Freelance
         bio: Ex UX designer, crea sistemi su misura in Notion per professionisti e team. Su YouTube parla di organizzazione, produttività e pensiero critico.
       - name: Andrea Pinotti
         role: Digital research & improvement
