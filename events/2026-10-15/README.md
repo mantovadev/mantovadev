@@ -1,3 +1,15 @@
+---
+number: 5
+talks:
+  - time: "19:00"
+    title: Il Tablettone
+    subtitle: Un player MP3/MP4 realizzato in Python con un Raspberry Pi
+    speakers:
+      - name: Stefano Salvi
+        role: Ex docente di Sistemi e Reti
+        company: IIS E. Fermi Mantova
+        bio: Ingegnere elettronico, ha sviluppato software e hardware e insegnato informatica al Fermi e all'Università di Pavia.
+---
 # Mantova Dev #5 - Il Tablettone
 
 - **Data:** 2026-10-15

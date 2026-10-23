@@ -1,3 +1,17 @@
+---
+# Letto dagli overlay dello streaming (stream/README.md). time, subtitle, role, company e bio sono facoltativi.
+number: N
+talks:
+  - time: "19:00"
+    title: Titolo talk
+    subtitle: Sottotitolo
+    speakers:
+      - name: Nome Cognome
+        role: Ruolo
+        company: Azienda
+        bio: Una o due frasi sullo speaker, al massimo 30 parole.
+---
+
 # Mantova Dev #N - Titolo
 
 - **Data:** YYYY-MM-DD
