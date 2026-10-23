@@ -1,0 +1,103 @@
+/* Overlays for a 1920x1080 OBS canvas. Browser sources render them 1:1, so sizes are in px. */
+:root {
+  --teal: #03e0cf;
+  --magenta: #e00384;
+  --bg: #041917;
+  --ink: #fffafb;
+  --muted: color-mix(in srgb, var(--ink) 72%, var(--bg));
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; }
+body {
+  position: relative;
+  background: radial-gradient(ellipse 60% 55% at 50% 45%, color-mix(in srgb, var(--teal) 10%, var(--bg)), var(--bg)), var(--bg);
+  color: var(--ink);
+  font: 500 28px/1.25 Satoshi, system-ui, sans-serif;
+}
+.box { position: absolute; }
+.label { color: var(--teal); font-size: 20px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+
+/* where OBS puts a video source: the outline stays visible around it */
+.slot { outline: 3px solid var(--teal); background: #020d0c; }
+
+/* card beside the camera */
+.card { overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 20px; border-top: 3px solid var(--magenta); background: color-mix(in srgb, var(--ink) 4%, transparent); }
+/* in the speaker card, one .person per speaker, stacked: only the .on one shows */
+.card .person { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px; padding: 20px; transition: opacity .8s; }
+.card .person:not(.on) { opacity: 0; }
+/* label line in Talk 4:3: TALK and the speakers */
+.card .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.card .meta .speaker { overflow: hidden; color: var(--muted); font-size: 26px; text-overflow: ellipsis; white-space: nowrap; }
+/* name and role keep at most two lines, ending with "..." */
+.card .name, .card .role { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.card .name { flex: none; font-size: 34px; font-weight: 700; line-height: 1.15; }
+.card .role { flex: none; margin-top: 4px; font-size: 24px; line-height: 1.3; }
+.card .company { flex: none; overflow: hidden; color: var(--teal); font-size: 24px; text-overflow: ellipsis; white-space: nowrap; }
+.card .bio { flex: 1 1 auto; min-height: 0; margin-top: 6px; overflow: hidden; color: var(--muted); font-size: 22px; line-height: 1.35; }
+
+/* bottom band: logo, event, link and QR */
+.band { display: flex; align-items: center; gap: 48px; border-top: 3px solid var(--teal); padding-top: 3px; }
+.band .logo { height: 48px; }
+.band .event { flex: 1; min-width: 0; }
+.band .event .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* title and subtitle share one line, so the footer keeps two lines like its other blocks; too long, the line scrolls */
+.band .event .line { overflow: hidden; white-space: nowrap; }
+.band .event b { font-size: 36px; }
+.band .event .sub { margin-left: 20px; color: var(--muted); font-size: 24px; }
+.ticker:has(.track) { text-overflow: clip; mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent); }
+.ticker .track { display: inline-flex; animation: ticker var(--dur) linear infinite; }
+.ticker .track > span { padding-right: 96px; }
+@keyframes ticker {
+  0%, 20% { transform: none; }
+  100% { transform: translateX(var(--shift)); }
+}
+.link { text-align: right; }
+.link b { display: block; font-size: 36px; }
+.qr { display: block; width: 120px; height: 120px; }
+
+/* compact card and footer content in the side column of Talk 4:3 */
+[data-layout="talk-4x3"] .card { gap: 6px; padding: 16px 20px; }
+[data-layout="talk-4x3"] .card .title, [data-layout="talk-4x3"] .card .sub { overflow: hidden; white-space: nowrap; }
+[data-layout="talk-4x3"] .card .title { font-size: 30px; font-weight: 700; }
+[data-layout="talk-4x3"] .card .sub { color: var(--muted); font-size: 24px; }
+.aside { display: flex; align-items: flex-end; justify-content: space-between; border-top: 3px solid var(--teal); }
+.aside .logo { display: block; height: 36px; margin-bottom: 12px; }
+.aside .link { text-align: left; }
+.aside .link b { font-size: 32px; }
+.aside .qr { width: 112px; height: 112px; }
+
+/* full-screen filler (Inizio, Pausa, Fine) */
+.full { inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 240px 120px; text-align: center; }
+.top { position: absolute; top: 80px; left: 0; right: 0; display: flex; justify-content: center; }
+.top .logo { width: 400px; }
+.full h1 { font-size: 96px; line-height: 1.05; text-transform: uppercase; }
+.full .bar { width: 160px; height: 6px; margin-top: 44px; background: linear-gradient(90deg, var(--teal), var(--magenta)); }
+.full .talks { width: 100%; margin-top: 44px; padding: 0; list-style: none; }
+.full .talks li + li { margin-top: 16px; }
+.full .talks b, .full .talks .sub { display: block; overflow: hidden; white-space: nowrap; }
+.full .talks b { font-size: 44px; }
+.full .talks .sub { color: var(--muted); font-size: 32px; }
+.full .talks .label { margin-top: 14px; font-size: 24px; }
+.cta { position: absolute; bottom: 64px; left: 0; right: 0; display: flex; align-items: center; justify-content: center; gap: 24px; }
+.cta .link { text-align: left; }
+
+/* pixel columns on the filler edges: each square fades teal to magenta and back, in a slow wave down the screen */
+.px { position: absolute; top: 0; width: 192px; height: 1080px; }
+.px.right { right: 0; transform: scaleX(-1); }
+.px i {
+  position: absolute;
+  left: calc(var(--x) * 24px);
+  top: calc(var(--y) * 24px);
+  width: 24px;
+  height: 24px;
+  background: var(--teal);
+  animation: px-drift var(--t) steps(1) var(--d) infinite, px-tint 16s ease-in-out var(--o) infinite;
+}
+@keyframes px-drift {
+  25% { translate: 100% 0; }
+  50% { translate: 100% -100%; }
+  75% { translate: 0 -100%; }
+}
+@keyframes px-tint {
+  50% { background: var(--magenta); }
+}
