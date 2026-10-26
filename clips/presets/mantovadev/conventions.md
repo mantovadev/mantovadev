@@ -25,12 +25,9 @@ YYYYMMDD-mantovadev-<slug>/   # today's date
 ```
 
 ```
-TITOLO
 <title>
 
-DIDASCALIA
 <caption>
 
-HASHTAG
 <hashtags>
 ```
