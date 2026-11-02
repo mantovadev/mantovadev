@@ -1,28 +1,48 @@
-// Builds the overlay for <body data-layout> from LAYOUTS (layouts.js) and the front matter of the event's README
+// Builds the overlay for <body data-layout> from LAYOUTS (layouts.js), the theme and the front matter of the event's README
 // (events/<date>/README.md). Without one, it shows a generic Mantova Dev overlay.
 // Boxes are [x, y, width, height] in canvas pixels; obs-scenes.py places the video sources on the same slots.
 (async () => {
+  // palette and logos per theme: a default and overrides per page
+  const TEAL = { palette: "teal", logo: "mantova-dev-logo.svg", event: "events-logo.svg" };
+  const MAGENTA = { palette: "magenta", logo: "mantova-dev-logo-purple.svg", event: "talk-logo.svg" };
+  const MONO = { palette: "mono", logo: "mantova-dev-logo-black.svg", event: "talk-logo-black.svg" };
+  const THEMES = {
+    talk: { default: MAGENTA, inizio: TEAL, fine: TEAL },
+    events: { default: TEAL },
+    mono: { default: MONO },
+  };
+  const FILLERS = ["inizio", "pausa", "fine"];
+  const SOCIALS = ["tiktok", "instagram", "facebook", "youtube", "linkedin", "telegram", "github"];
+
   const body = document.body;
   const layout = body.dataset.layout;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  const logo = `<img class="logo" src="../../assets/svg/logo-orizzontale-chiaro.svg" alt="Mantova Dev">`;
-  const qr = `<img class="qr" src="qr.svg" alt="">`;
-  const link = `<div class="link"><div class="label">Prossimi eventi</div><b>mantova.dev</b></div>`;
-  const add = (html) => body.insertAdjacentHTML("beforeend", html);
-  const box = (cls, [x, y, w, h], html = "") =>
-    add(`<div class="box ${cls}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px">${html}</div>`);
 
   const event = await latestEvent();
-  const names = (talk) => (talk.speakers ?? []).map((p) => p.name).join(", ");
+  const theme = Object.hasOwn(THEMES, event?.theme ?? "") ? event.theme : "talk";
+  const brand = THEMES[theme][layout] ?? THEMES[theme].default;
+  // a partner's logos, paths relative to the event folder: logo (top right of the fillers), lockup (in place of ours),
+  // talk (in place of the event logo in the footer), side (in place of the event logo in the side column)
+  const partner = event?.partner ?? {};
+  const img = (cls, slot, own) => partner[slot]
+    ? `<img class="${cls} partner" src="../../events/${event.date}/${esc(partner[slot])}" alt="">`
+    : `<img class="${cls}" src="assets/logos/${own}" alt="">`;
+  body.dataset.theme = theme;
+  body.dataset.palette = brand.palette;
+
+  const canvas = document.createElement("canvas");
+  canvas.className = "background";
+  const content = document.createElement("div");
+  body.prepend(canvas, content);
+  window.playBackground(canvas, window.BACKGROUNDS[theme][FILLERS.includes(layout) ? layout : "live"]);
+
+  const add = (html) => content.insertAdjacentHTML("beforeend", html);
+  const box = (cls, [x, y, w, h], html = "") =>
+    add(`<div class="box ${cls}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px">${html}</div>`);
   let rotation;
 
-  if (layout === "full") {
-    pixels();
-    const talks = (event?.talks ?? []).map((t) =>
-      `<li><b class="ticker">${esc(t.title)}</b>${opt("sub ticker", t.subtitle)}<div class="label">${esc(names(t))}</div></li>`).join("");
-    add(`<div class="top">${logo}</div><div class="box full"><h1>${esc(body.dataset.heading)}</h1>${talks && `<div class="bar"></div><ul class="talks">${talks}</ul>`}</div>`);
-    add(`<div class="cta">${qr}${link}</div>`);
-    document.fonts.ready.then(fitText);
+  if (FILLERS.includes(layout)) {
+    filler();
   } else {
     // the talk on stage follows the clock: check every 30 s and redraw when it changes
     let shown = onStage();
@@ -31,49 +51,63 @@
       if (onStage() === shown) return;
       shown = onStage();
       clearInterval(rotation);
-      body.replaceChildren();
+      content.replaceChildren();
       render(shown);
     }, 30000);
+  }
+
+  function filler() {
+    const date = event ? `<p class="date">${esc(event.date)}.md</p>` : "";
+    const title = `<h1>${esc(body.dataset.heading)}</h1>`;
+    // Fine also points to the next events and the socials
+    const fine = layout === "fine";
+    const heading = fine ? `<div class="hero">${title}<div class="cta"><img class="qr" src="qr.svg" alt=""><div><div class="label">Prossimi eventi</div><b>mantova.dev</b></div></div></div>` : title;
+    const icons = fine ? `<ul class="socials">${SOCIALS.map((name) => `<li><svg aria-label="${name}"><use href="../../site/icons.svg#${name}"/></svg></li>`).join("")}</ul>` : "";
+    const logo = img("logo", "lockup", brand.logo);
+    if (partner.logo) {
+      add(`<div class="stage"><div class="topbar">${img("event-logo", "", brand.event)}${date}${img("partner-logo", "logo")}</div>${heading}<div class="logos">${logo}</div>${icons}</div>`);
+    } else {
+      add(`<div class="stage">${date}${heading}<div class="logos">${logo}${img("event-logo", "", brand.event)}</div>${icons}</div>`);
+    }
   }
 
   function render(talk) {
     const L = window.LAYOUTS[layout];
     if (L.screen) box("slot", L.screen);
     if (L.camera) box("slot", L.camera);
-    if (L.aside) {
-      // Talk 4:3 has no footer: its short card carries the talk, with the speaker on the label line
-      if (talk) box("card", L.card, `<div class="meta"><span class="label">Talk</span><span class="speaker ticker">${esc(names(talk))}</span></div><div class="title ticker">${esc(talk.title)}</div>${opt("sub ticker", talk.subtitle)}`);
-      box("aside", L.aside, `<div>${logo}${link}</div>${qr}`);
+    const speakers = talk?.speakers ?? [];
+    // Talk 4:3 has room for the name only
+    const people = speakers.map((p, n) => `<div class="person" data-i="${n}">${layout === "talk-4x3" ? `<div class="name">${esc(p.name)}</div>` : person(p)}</div>`).join("");
+    const card = `card${speakers.some((p) => p.bio) ? " has-bio" : ""}`;
+    // without an event, the tagline goes on the subtitle line
+    const lines = `${opt("title ticker", talk?.title)}${opt("subtitle ticker", talk ? talk.subtitle : "La tech community per sviluppatori e appassionati")}`;
+    if (L.side) {
+      // the side column: the speaker below the video, then the talk and the logos
+      const top = speakers.length ? `<div class="card">${people}</div>` : "";
+      box("side", L.side, `${top}<div class="text"><div class="center fit">${lines}</div><div class="logos">${img("logo", "", brand.logo)}${img("event-logo", "side", brand.event)}</div></div>`);
     } else {
-      // the speaker card beside the video; in Panel, with several speakers, the list of names over it, the current one marked.
-      // Without cards, the speakers go on the footer label.
-      const speakers = talk?.speakers ?? [];
-      const cards = speakers.map((p, n) => `<div class="person" data-i="${n}">${person(p)}</div>`).join("");
-      if (L.card && speakers.length) box("card", L.card, cards);
-      const list = speakers.length > 1 ? speakers.map((p, n) => `<div class="who" data-i="${n}">${esc(p.name)}</div>`).join("") : "";
-      if (L.cards && speakers.length) box("cards", L.cards, `${list}<div class="card">${cards}</div>`);
-      // with the speakers on cards, the label carries the date instead: 12 novembre 2026
-      const when = new Date(`${event?.date}T12:00`).toLocaleDateString("it", { day: "numeric", month: "long", year: "numeric" });
-      const label = talk ? [event.number && `#${esc(event.number)}`, L.card || L.cards ? when : esc(names(talk))].filter(Boolean).join(" · ") : "Mantova Dev";
-      const sub = talk?.subtitle ? `<span class="sub">${esc(talk.subtitle)}</span>` : "";
-      const line = talk ? `<b>${esc(talk.title)}</b>${sub}` : "<b>La tech community per sviluppatori e appassionati</b>";
-      box("band", L.band, `${logo}<div class="event"><div class="label">${label}</div><div class="line ticker">${line}</div></div>${link}${qr}`);
+      if (L.card && speakers.length) box(card, L.card, people);
+      if (L.cards && speakers.length) {
+        // Panel: with several speakers, the list of names over the current one's card
+        const list = speakers.length > 1 ? speakers.map((p, n) => `<div class="speaker" data-i="${n}">${esc(p.name)}</div>`).join("") : "";
+        box("cards", L.cards, `${list}<div class="${card}">${people}</div>`);
+      }
+      add(`<div class="footer">${img("logo", "lockup", brand.logo)}<div class="center">${lines}</div>${img("event-logo", "talk", brand.event)}</div>`);
     }
     document.fonts.ready.then(fitText);
     // with more speakers, the cards take turns every 15 s: .on marks everything for speaker i
-    const count = talk?.speakers?.length ?? 0;
     let i = 0;
     const turn = () => document.querySelectorAll("[data-i]").forEach((el) => el.classList.toggle("on", el.dataset.i === String(i)));
     turn();
-    if (count > 1) rotation = setInterval(() => {
-      i = (i + 1) % count;
+    if (speakers.length > 1) rotation = setInterval(() => {
+      i = (i + 1) % speakers.length;
       turn();
     }, 15000);
   }
 
   // one speaker's card content. The .person cards are laid out stacked, so fitText can measure the hidden ones too
   function person(p) {
-    return `<div class="name">${esc(p.name)}</div>${opt("role", p.role)}${opt("company", p.company)}<div class="bio fit">${esc(p.bio ?? "")}</div>`;
+    return `<div class="who"><div class="name">${esc(p.name)}</div>${opt("meta", p.role)}${opt("meta", p.company)}</div>${opt("bio fit", p.bio)}`;
   }
 
   // today's README from disk; on other days, a local page can't list folders, so it asks GitHub for the events/<date>/
@@ -114,21 +148,10 @@
   }
 
   function fitText() {
-    // name and role prefer one line: shrink a little to get there, else keep the full size on two lines
-    for (const [selector, min] of [[".card .name", 28], [".card .role", 20]]) {
-      for (const el of document.querySelectorAll(selector)) {
-        const lines = () => Math.round(el.scrollHeight / parseFloat(getComputedStyle(el).lineHeight));
-        const full = parseFloat(getComputedStyle(el).fontSize);
-        let size = full;
-        while (lines() > 1 && size > min) el.style.fontSize = `${--size}px`;
-        if (lines() > 1) el.style.fontSize = `${(size = full)}px`;
-        while (lines() > 2 && size > min) el.style.fontSize = `${--size}px`; // over two lines even at full size: shrink to two
-      }
-    }
     // shrink text that overflows its box
     for (const el of document.querySelectorAll(".fit")) {
       let size = parseFloat(getComputedStyle(el).fontSize);
-      while (el.scrollHeight > el.clientHeight && size > 18) el.style.fontSize = `${--size}px`;
+      while (el.scrollHeight > el.clientHeight && size > 16) el.style.fontSize = `${--size}px`;
       // still too long at the smallest size: keep the lines that fit whole and end the last one with "...";
       // with room for less than 2 lines, hide it rather than show a fragment
       if (el.scrollHeight > el.clientHeight) {
@@ -152,24 +175,6 @@
       const shift = el.querySelector(".track span").offsetWidth;
       el.style.setProperty("--shift", `-${shift}px`);
       el.style.setProperty("--dur", `${(shift / 70 / 0.8).toFixed(1)}s`); // 70 px/s, plus a 20% pause at the start
-    }
-  }
-
-  // two 8x45 columns of squares, denser at the edge; a fixed seed keeps the pattern stable across reloads.
-  // --o staggers the teal/magenta fade so it travels down the columns.
-  function pixels() {
-    let seed = 5;
-    const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-    for (const side of ["left", "right"]) {
-      let squares = "";
-      for (let y = 0; y < 45; y++) {
-        for (let x = 0; x < 8; x++) {
-          if (rand() > 0.5 * (1 - x / 8) ** 1.6) continue;
-          const o = -(16 - (y / 45) * 16 + x * 0.4).toFixed(1);
-          squares += `<i style="--x:${x};--y:${y};--o:${o}s;--t:${(6 + rand() * 8).toFixed(1)}s;--d:-${(rand() * 14).toFixed(1)}s"></i>`;
-        }
-      }
-      add(`<div class="px ${side}">${squares}</div>`);
     }
   }
 })();

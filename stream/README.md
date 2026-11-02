@@ -1,23 +1,24 @@
 # Streaming
 
-OBS setup for streaming meetups on YouTube: brand overlays and a generated scene collection.
+OBS setup for streaming meetups on YouTube: brand overlays and a generated scene collection. The look follows the design by Giovanni Serretiello.
 
 - `overlay/`: one HTML page per scene, loaded in OBS as 1920x1080 browser sources. `layouts.js` holds the video slots. The event info comes from the front matter of today's `events/<date>/README.md`, else of the next or newest event folder on GitHub's `main` (pull first). With none, the overlays show a generic Mantova Dev version.
+- `overlay/background.js` draws the animated blocks; `overlay/backgrounds.js` holds, for each theme, the colors and a density map for each filler page plus one shared by the video scenes. To keep an area clear, set its map digits to 0.
 - `obs-scenes.py`: writes an OBS scene collection whose video sources sit on the same slots.
 
 ## Scenes
 
 | Scene | Content |
 |---|---|
-| Inizio | Filler: logo, "Starting soon...", talks, mantova.dev and QR |
-| Talk | Speaker screen 16:9 (1536x864), camera cropped 2:3, speaker card (name, role, company, bio), footer with talk title and subtitle |
-| Talk 4:3 | Speaker screen 4:3 at full height (1376x1032), side column with camera cropped 2:3, compact card with talk and speaker, logo, mantova.dev and QR |
-| Demo | Speaker screen (1536x864) and footer, with the speaker in its label |
-| Solo camera | Camera (1536x864) and footer, with the speaker in its label: introductions, Q&A |
-| Big camera | Camera cropped 16:10 (1376x864), speaker screen small on the side, speaker card and footer |
-| Panel | Camera (1536x864), the speakers' names over the current one's card (in turn, 15 s each), and footer: discussions without slides |
-| Pausa | Filler: logo, "Torniamo tra poco", talks, mantova.dev and QR |
-| Fine | Filler: logo, "Grazie a tutti!", talks, mantova.dev and QR |
+| Inizio | Filler: date, "Starting soon", logos |
+| Talk | Speaker screen 16:9, camera cropped 5:7, speaker card (name, role, company, bio), footer with logos, talk title and subtitle |
+| Talk 4:3 | Speaker screen 4:3, side column with camera cropped 5:6, speaker name, talk title and subtitle, logos |
+| Demo | Speaker screen and footer |
+| Solo camera | Camera and footer: introductions, Q&A |
+| Big camera | Camera cropped 4:3, side column with the speaker screen small, speaker card, talk title and subtitle, logos |
+| Panel | Camera, the speakers' names over the current one's card (in turn, 15 s each), and footer: discussions without slides |
+| Pausa | Filler: date, "Torniamo tra poco", logos |
+| Fine | Filler: date, "Grazie", QR to mantova.dev, logos, social icons |
 
 Mic and speaker laptop audio are global devices (`Microfono`, `Audio speaker`), so they are the same in every scene. `Audio speaker` starts muted. The mic has noise suppression, a compressor and a limiter.
 
@@ -38,11 +39,20 @@ Mic and speaker laptop audio are global devices (`Microfono`, `Audio speaker`), 
 
 ## Before each meetup
 
-1. Fill in the front matter of the event's README (from `events/_template.md`): the meetup number and, for each talk, time, title, subtitle and its speakers, each with name, role, company and bio. Only title and the speakers' names are required; list the talks in time order. Keep each bio under 30 words, fewer with a long role: longer bios shrink, and past about 35 words they get cut; up to 3 talks fit the Inizio, Pausa and Fine screens.
+1. Fill in the front matter of the event's README (from `events/_template.md`): the theme and, for each talk, time, title, subtitle and its speakers, each with name, role, company and bio. Only title and the speakers' names are required; list the talks in time order. `theme` is `talk` (the default), `events` or `mono` (black and white, designed for events with a partner: without the `partner` block below, its background runs behind our logos on the fillers). Keep each bio under 30 words, fewer with a long role: longer bios shrink, and past about 35 words they get cut.
+
+   For an event with a partner, add a `partner` block with the paths of its logo files, relative to the event folder (for example in `logos/`). Each slot is optional and falls back to our logos; a logo keeps the slot's height and shrinks to fit its width.
+
+   | Slot | Where | Height, max width (px) |
+   |---|---|---|
+   | `logo` | Top right of Inizio, Pausa and Fine (moves the date and event logo to the top) | 90, 360 |
+   | `lockup` | In place of the Mantova Dev logo: bottom of the fillers, left of the footer | 73 and 36, 1000 and 480 |
+   | `talk` | In place of the event logo, right of the footer | 48, 480 |
+   | `side` | In place of the event logo in the side column of Talk 4:3 and Big camera | 40, 216 |
 2. After editing it, refresh the overlays: in OBS, open each `Overlay ...` source and press "Refresh cache of current page", or restart OBS.
 3. Run a short unlisted test stream from the venue.
 
-On the evening, the Talk, Talk 4:3, Demo and Solo camera overlays show the last talk whose `time` has come, and switch on their own. The overlays need internet to load the YAML parser and the font, and on other days to list the events on GitHub; without it, they show the generic version.
+On the evening, the overlays with a talk show the last one whose `time` has come, and switch on their own. The overlays need internet to load the YAML parser and the font, and on other days to list the events on GitHub; without it, they show the generic version.
 
 ## Settings checklist
 

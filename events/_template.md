@@ -1,6 +1,6 @@
 ---
-# Letto dagli overlay dello streaming (stream/README.md). time, subtitle, role, company e bio sono facoltativi.
-number: N
+# Letto dagli overlay dello streaming (stream/README.md). theme, time, subtitle, partner, role, company e bio sono facoltativi.
+theme: talk
 talks:
   - time: "19:00"
     title: Titolo talk

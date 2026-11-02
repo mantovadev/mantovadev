@@ -84,8 +84,8 @@ def main():
     screen_audio = source("Audio speaker", "coreaudio_input_capture", devices.get("screen_audio", {}) or {"device_id": "default"}, muted=True)
 
     pages = {name: browser(f"Overlay {name}", page) for name, page in [
-        ("Inizio", "inizio.html"), ("Talk", "talk.html"), ("Talk 4:3", "talk-4x3.html"), ("Demo", "demo.html"),
-        ("Solo camera", "camera.html"), ("Big camera", "big-camera.html"), ("Panel", "panel.html"), ("Pausa", "pausa.html"), ("Fine", "fine.html"),
+        ("Inizio", "inizio.html"), ("Talk", "talk.html"), ("Talk 4:3", "talk-4x3.html"), ("Live", "live.html"),
+        ("Big camera", "big-camera.html"), ("Panel", "panel.html"), ("Pausa", "pausa.html"), ("Fine", "fine.html"),
     ]}
 
     def talk_scene(name, layout):
@@ -96,8 +96,8 @@ def main():
         scene("Inizio", [(pages["Inizio"], None, False)]),
         talk_scene("Talk", "talk"),
         talk_scene("Talk 4:3", "talk-4x3"),
-        scene("Demo", [(pages["Demo"], None, False), (screen, layouts["demo"]["screen"], False)]),
-        scene("Solo camera", [(pages["Solo camera"], None, False), (camera, layouts["camera"]["camera"], True)]),
+        scene("Demo", [(pages["Live"], None, False), (screen, layouts["live"]["screen"], False)]),
+        scene("Solo camera", [(pages["Live"], None, False), (camera, layouts["live"]["screen"], True)]),
         scene("Big camera", [(pages["Big camera"], None, False), (camera, layouts["big-camera"]["camera"], True), (screen, layouts["big-camera"]["screen"], False)]),
         scene("Panel", [(pages["Panel"], None, False), (camera, layouts["panel"]["camera"], True)]),
         scene("Pausa", [(pages["Pausa"], None, False)]),
