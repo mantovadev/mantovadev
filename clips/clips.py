@@ -87,8 +87,11 @@ BREAK_AFTER = ".?!;:"   # punctuation that ends a chunk
 STRIP_PUNCT = ".,;:"    # punctuation not shown on screen ("?" and "!" stay)
 
 # tighten: pauses inside a cut clip are shortened, never removed whole. A pause is a
-# quiet run found by silencedetect on the clip itself, by default at the same noise floor
-# as preview. A noisy room never gets that quiet between words: tighten --floor raises it.
+# quiet run found by silencedetect on the clip itself. Its floor is louder than preview's:
+# a room rarely gets down to SILENCE_NOISE between words, and a run this quiet for
+# --min-pause seconds is still no word. Drops keep looking for their edges from
+# SILENCE_NOISE up, like preview.
+TIGHT_FLOOR_DB = -25
 TIGHT_DETECT_S = 0.15       # shortest quiet run silencedetect reports for tighten
 TIGHT_MERGE_S = 0.03        # quiet runs split by a click shorter than this count as one
 # A clip should move: a pause keeps about a third of a second, a little more after a
@@ -1447,11 +1450,12 @@ def cmd_tighten(args, root: Path, work_dir: Path):
         words = read_words(Path(str(base) + ".words.tsv"))
         fps, video_start, frames = ffprobe_video(clip)
         levels = [merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S, noise), TIGHT_MERGE_S)
-                  for noise in noise_floors(args.floor)]
+                  for noise in noise_floors()]
+        quiet = merge_quiet_runs(detect_silences(clip, TIGHT_DETECT_S, f"{args.floor}dB"), TIGHT_MERGE_S)
         duration = ffprobe_duration(clip)
-        cuts = plan_pauses(words, levels[0], duration, fps, video_start, args.min_pause, args.keep)
+        cuts = plan_pauses(words, quiet, duration, fps, video_start, args.min_pause, args.keep)
         if args.fillers:
-            for filler in plan_fillers(base, default_model(root), words, levels[0], fps, video_start):
+            for filler in plan_fillers(base, default_model(root), words, quiet, fps, video_start):
                 cuts = absorb(cuts, filler)
         for cid, spec in drops:
             if cid == clip_id:
@@ -1461,7 +1465,7 @@ def cmd_tighten(args, root: Path, work_dir: Path):
                 "settings": {"floor": args.floor, "min_pause": args.min_pause, "keep": args.keep}}
         save_json(Path(str(base) + ".tighten.json"), plan)
         keeps = keep_ranges(cuts, frames)
-        print_tighten_report(clip_id, words, plan, keeps, untranscribed(words, levels[0], duration, cuts))
+        print_tighten_report(clip_id, words, plan, keeps, untranscribed(words, quiet, duration, cuts))
         if len(keeps) < 2:
             print("  nothing to tighten: burn will use the clip as it is.")
             continue
@@ -2045,9 +2049,8 @@ def build_parser():
     p.add_argument("--drop", action="append", metavar="ID=WORDS",
                    help=f"Remove a stretch quoted from the words file: 3=\"first words{DROP_SEP}last words\", or 3=12.4-14.5 in clip seconds.")
     p.add_argument("--fillers", action="store_true", help="Also cut hesitations (eh, ehm, mmh) between words.")
-    p.add_argument("--floor", type=int, default=SILENCE_NOISE_DB, metavar="DB",
-                   help=f"Noise floor of a pause, in dB (default {SILENCE_NOISE_DB}). Raise it (-30, -25) "
-                        "in a noisy room, where few pauses get that quiet.")
+    p.add_argument("--floor", type=int, default=TIGHT_FLOOR_DB, metavar="DB",
+                   help=f"Noise floor of a pause, in dB (default {TIGHT_FLOOR_DB}).")
     p.add_argument("--min-pause", type=float, default=TIGHT_MIN_PAUSE, metavar="S",
                    help=f"Shortest pause that gets shortened, in seconds (default {TIGHT_MIN_PAUSE}).")
     p.add_argument("--keep", type=float, default=TIGHT_GAP, metavar="S",

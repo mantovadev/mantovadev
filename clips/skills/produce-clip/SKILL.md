@@ -67,11 +67,8 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
      to the nearest pauses, or leave the stretch in.
    - Pauses of 0.4 s or more are shortened to about 0.3 s. Estimate the gain from the
      pauses in the report, not from gaps in the words file. Drops are what shortens a
-     clip.
-   - A pause is what gets quieter than -35 dB. In a noisy room few pauses do, and the
-     report shortens only a handful: try `--floor -30`, then `--floor -25`, and let the
-     human compare. `--min-pause` and `--keep` change which pauses are shortened and to
-     what (the report's second line shows the values used). Pass them on every run.
+     clip. Only if the human asks for it, `--floor`, `--min-pause` and `--keep` change
+     which pauses are shortened and to what.
    - `--fillers` also cuts hesitations (eh, ehm, mmh) between words; the report lists
      each one. Pass it on every run once the human wants them out. Cuts that would
      leave only a sliver between them (shorter than `--keep`, no word) become one

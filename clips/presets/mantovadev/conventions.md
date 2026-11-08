@@ -10,9 +10,7 @@ Italian, informal, no hype, only what the clip says and what
 plain words: no teaser, no striking numbers. Earlier `post.txt` files in the delivery
 folder show the tone. A title of at most 60 characters, a caption of 2 or 3 short
 sentences ending with an invitation to the next meetup, 5 to 8 hashtags (`#Mantova`
-`#Developers` plus ones about the clip's topic). No links: captions on Instagram, TikTok and Shorts do not
-make them clickable, and the video already shows `https://mantova.dev` in its footer and
-end card. Name the speaker only if the event README does. Nothing dated.
+`#Developers` plus ones about the clip's topic).
 
 ## Delivery
 
