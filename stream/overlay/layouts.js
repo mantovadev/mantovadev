@@ -1,9 +1,9 @@
 // obs-scenes.py reads everything after the assignment as strict JSON: quoted keys, no trailing commas, no comments below.
+// All whole pixels: with fractions, the browser snaps the boxes and OBS places the video off its frame.
 window.LAYOUTS = {
-  "talk": { "screen": [24, 24, 1536, 864], "camera": [1584, 24, 312, 468], "card": [1584, 516, 312, 372], "band": [24, 912, 1872, 144] },
-  "talk-4x3": { "screen": [24, 24, 1376, 1032], "camera": [1424, 24, 472, 708], "card": [1424, 756, 472, 144], "aside": [1424, 924, 472, 132] },
-  "camera": { "camera": [192, 24, 1536, 864], "band": [24, 912, 1872, 144] },
-  "big-camera": { "camera": [24, 24, 1376, 864], "screen": [1424, 24, 472, 266], "card": [1424, 314, 472, 574], "band": [24, 912, 1872, 144] },
-  "panel": { "camera": [24, 24, 1536, 864], "cards": [1584, 24, 312, 864], "band": [24, 912, 1872, 144] },
-  "demo": { "screen": [192, 24, 1536, 864], "band": [24, 912, 1872, 144] }
+  "talk": { "screen": [81, 57, 1391, 782], "camera": [1548, 57, 291, 409], "card": [1547, 467, 293, 373] },
+  "talk-4x3": { "screen": [81, 74, 1245, 932], "camera": [1401, 74, 438, 525], "side": [1400, 599, 440, 408] },
+  "live": { "screen": [228, 57, 1464, 823] },
+  "big-camera": { "camera": [81, 74, 1245, 932], "screen": [1401, 74, 438, 246], "side": [1400, 320, 440, 687] },
+  "panel": { "camera": [81, 57, 1391, 782], "cards": [1547, 56, 293, 784] }
 }
