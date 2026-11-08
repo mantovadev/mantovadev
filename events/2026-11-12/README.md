@@ -1,9 +1,14 @@
 ---
-number: 6
+theme: mono
+partner:
+  logo: logos/ifweb-logo.svg
+  lockup: logos/mantova-dev-copiaincolla.svg
+  talk: logos/talk-ifweb.svg
+  side: logos/copiaincolla-logo.svg
 talks:
   - time: "19:30"
     title: Da Notion a tutto il resto
-    subtitle: Nuovi orizzonti dell'organizzazione digitale
+    subtitle: I nuovi vasti orizzonti dell'organizzazione digitale
     speakers:
       - name: Debora Montoli
         role: Professional organizer

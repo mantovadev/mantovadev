@@ -1,5 +1,4 @@
 ---
-number: 5
 talks:
   - time: "19:00"
     title: Il Tablettone
