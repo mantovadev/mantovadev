@@ -14,7 +14,8 @@ It also joins finished clips into a montage.
 2. `tighten` (optional): drops stretches the human agreed to lose and shortens long
    pauses. This is how a raw cut of up to 120 s becomes a clip under 60 s.
 3. `burn`: the 1080x1920 clip in the preset's look (background, logo, the picture at
-   full width, word-by-word captions, the footer text at the bottom),
+   full width, word-by-word captions on one line, or two where a wide picture leaves
+   room above the footer, the footer text at the bottom),
    brought to a common loudness (-14 LUFS). Everything stays clear of the TikTok and
    Shorts UI (top ~230 px, bottom ~345 px, action buttons on the right).
 4. `cover`: a 1080x1920 still to upload as the post's cover (Instagram, TikTok,
@@ -67,11 +68,19 @@ candidate. Files are in `clips/work/<event>/final/`: `clip_<id>.mp4` (the cut),
    - Pauses of 0.4 s or more are shortened to about 0.3 s. Estimate the gain from the
      pauses in the report, not from gaps in the words file. Drops are what shortens a
      clip.
+   - A pause is what gets quieter than -35 dB. In a noisy room few pauses do, and the
+     report shortens only a handful: try `--floor -30`, then `--floor -25`, and let the
+     human compare. `--min-pause` and `--keep` change which pauses are shortened and to
+     what (the report's second line shows the values used). Pass them on every run.
    - `--fillers` also cuts hesitations (eh, ehm, mmh) between words; the report lists
-     each one. Pass it on every run once the human wants them out.
+     each one. Pass it on every run once the human wants them out. Cuts that would
+     leave only a sliver between them (shorter than `--keep`, no word) become one
+     splice.
    - The report flags sound with no words (a hesitation or a false start whisper left
      out). Ask the human; to cut it, `--drop '<id>=<start>-<end>'` in clip seconds, as
-     the report prints them. Report times are the tightened player's.
+     the report prints them. Report times are the tightened player's. Often it is a
+     drawn-out vowel or the tail of a word: never drop these stretches whole without
+     the human hearing them first.
    - Every run plans from scratch: give all the drops each time. The clip's start and
      end are not `tighten`'s job: move them with `choose`, then `cut --force`.
    - Open `clip_<id>.tight.mp4` and ask about each splice.
