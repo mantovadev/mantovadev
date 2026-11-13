@@ -20,15 +20,15 @@ OBS setup for streaming meetups on YouTube: brand overlays and a generated scene
 | Pausa | Filler: date, "Torniamo tra poco", logos |
 | Fine | Filler: Mantova Dev logo, "Grazie", the claim, a card with the social icons and the QR to mantova.dev |
 
-Mic and speaker laptop audio are global devices (`Microfono`, `Audio speaker`), so they are the same in every scene. `Audio speaker` starts muted. The mic has noise suppression, a compressor and a limiter.
+Mic and speaker laptop audio are global devices (`Microfono`, `Audio speaker`), so they are the same in every scene. `Audio speaker` starts muted. The mic has gentle Speex noise suppression (-10 dB) for the hiss, then +4 dB gain and a limiter at -2 dB. These were picked by ear on a past meetup recording; RNNoise and a compressor clipped words and made a distant mic in a big room sound robotic, so avoid them.
 
 ## Setup (once per Mac)
 
-1. Generate the collection, copying devices from an existing one (optional):
+1. Generate the collection. The first time on a Mac, run it without `--devices` and pick the devices in step 4. To regenerate later, copy the devices from the current "Mantova Dev" collection (before removing it in step 3):
 
    ```sh
    python3 stream/obs-scenes.py -o ~/Desktop/mantovadev-obs.json \
-     --devices ~/Library/Application\ Support/obs-studio/basic/scenes/Untitled.json
+     --devices ~/Library/Application\ Support/obs-studio/basic/scenes/Mantova_Dev.json
    ```
 
    The overlay paths in the file are absolute: regenerate it if the repo moves.
