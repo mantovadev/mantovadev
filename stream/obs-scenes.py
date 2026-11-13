@@ -5,11 +5,11 @@ Writes a JSON file to import in OBS (Scene Collection > Import). Video slots com
 overlay/layouts.js, the same file the overlay pages read, so sources and frames line up.
 
   python3 stream/obs-scenes.py -o ~/Desktop/mantovadev-obs.json \
-      --devices ~/Library/Application\\ Support/obs-studio/basic/scenes/Untitled.json
+      --devices ~/Library/Application\\ Support/obs-studio/basic/scenes/Mantova_Dev.json
 
---devices copies capture device settings from an existing collection, matching these
-source names: "CC Video" (speaker screen), "Camera", "Camera Audio" (mic), "CC Audio".
-Without it, pick the devices in each source's properties after importing.
+--devices copies capture device settings from a collection this script generated before:
+"Schermo speaker", "Camera", "Microfono", "Audio speaker". Without it (first time on a Mac),
+pick the devices in OBS after importing.
 """
 import argparse
 import json
@@ -18,7 +18,7 @@ import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 OVERLAY = HERE / "overlay"
-DEVICE_NAMES = {"screen": "CC Video", "camera": "Camera", "mic": "Camera Audio", "screen_audio": "CC Audio"}
+DEVICE_NAMES = {"screen": "Schermo speaker", "camera": "Camera", "mic": "Microfono", "screen_audio": "Audio speaker"}
 
 
 def source(name, sid, settings, **extra):
@@ -67,7 +67,10 @@ def main():
     devices = {}
     if args.devices:
         print(f"Reading device settings from {args.devices}")
-        old = {s["name"]: s["settings"] for s in json.loads(args.devices.read_text())["sources"]}
+        old_collection = json.loads(args.devices.read_text())
+        # global audio devices live in their own keys, not in "sources"
+        old_sources = old_collection["sources"] + [v for k, v in old_collection.items() if "AudioDevice" in k]
+        old = {s["name"]: s["settings"] for s in old_sources}
         devices = {k: old.get(v, {}) for k, v in DEVICE_NAMES.items()}
         print("  matched: " + (", ".join(k for k, v in devices.items() if v) or "none"))
 
@@ -75,10 +78,12 @@ def main():
 
     screen = source("Schermo speaker", "macos-avcapture-fast", devices.get("screen", {}))
     camera = source("Camera", "macos-avcapture", devices.get("camera", {}))
+    # tested on a past recording: Speex lowers the hiss without touching the voice, gain and limiter
+    # bring it near YouTube's loudness. RNNoise and the compressor clipped words: don't use them.
     mic = source("Microfono", "coreaudio_input_capture", devices.get("mic", {}) or {"device_id": "default"}, filters=[
-        filt("Noise suppression", "noise_suppress_filter_v2", {"method": "rnnoise"}),
-        filt("Compressor", "compressor_filter", {"ratio": 4.0, "threshold": -18.0, "attack_time": 6, "release_time": 60, "output_gain": 0.0}),
-        filt("Limiter", "limiter_filter", {"threshold": -1.0, "release_time": 60}),
+        filt("Noise suppression", "noise_suppress_filter_v2", {"method": "speex", "suppress_level": -10}),
+        filt("Gain", "gain_filter", {"db": 4.0}),
+        filt("Limiter", "limiter_filter", {"threshold": -2.0, "release_time": 60}),
     ])
     # the speaker laptop's audio, for videos in a talk: unmute when needed
     screen_audio = source("Audio speaker", "coreaudio_input_capture", devices.get("screen_audio", {}) or {"device_id": "default"}, muted=True)
